@@ -9,6 +9,10 @@ This document is the brief for building it. It records what was verified and
 how, what was decided and why, and what is still open. Read it end to end
 before writing code; section 11 is the order to build in.
 
+**Status (2026-09-23):** build steps 1–5 and 7 are done (§11). All 15
+integration scenarios pass against a local D1 under `wrangler dev --local`.
+What's left: feature-gated types, the `sqlx-query` feature, docs and release.
+
 ---
 
 ## 1. Why this exists
@@ -89,8 +93,17 @@ A scratch crate depending on `sqlx = { version = "0.9", default-features = false
 
 **Consequence:** depend on `sqlx-core` (or `sqlx` with
 `default-features = false` and no runtime, no driver). Never enable a runtime
-feature. Check whether anything in the tree needs `getrandom/wasm_js`; if so,
-document it for consumers rather than hiding it.
+feature. `getrandom` is **not** in this crate's wasm32 tree
+(`cargo tree -i getrandom --target wasm32-unknown-unknown` finds nothing), so
+consumers need no `wasm_js` workaround on our account.
+
+**`offline` must always be on.** sqlx's `macros` feature, which is in sqlx's
+default feature set, enables `sqlx-core/offline`. That feature makes
+`Executor::describe` a *required* method (`sqlx-0.9.0/Cargo.toml`,
+`sqlx-core-0.9.0/src/executor.rs`). A driver that implemented `describe`
+only behind a feature of its own would stop compiling as soon as a consumer
+kept sqlx's defaults. So this crate enables `sqlx-core/offline`
+unconditionally and always implements `describe`.
 
 Without a runtime, sqlx-core's `connect_tcp` ends in
 `crate::rt::missing_rt(..)`, which panics with *"one of the `runtime` features
@@ -143,6 +156,31 @@ From `worker-0.8.6/src/d1/mod.rs` and `worker-sys-0.8.6/src/types/d1.rs`:
   D1 does not accept `BigInt`.
 - `worker::send::{SendFuture, SendWrapper}` exist and are `unsafe impl Send +
   Sync`, justified in their module docs by Workers being single-threaded.
+- **`worker::D1Database` is already `unsafe impl Send + Sync`**
+  (`src/d1/mod.rs:34`), so the handle needs no `SendWrapper`. Only the
+  futures are `!Send`.
+- **`D1Database::prepare` unwraps** the JS result (`src/d1/mod.rs:60`). If D1
+  rejects a statement at prepare time, that aborts the Worker. So `js.rs`
+  calls `worker-sys`'s `prepare` directly, which returns a `Result`.
+
+### D1 behaviour (local, workerd via wrangler 4.129.0)
+
+Observed through the test Worker (§10), 2026-09-23:
+
+- A bound `ArrayBuffer` is stored as a BLOB (`typeof(col) = 'blob'`).
+- BLOBs come **back** as a plain JS `Array` of numbers, not a `Uint8Array`
+  or an `ArrayBuffer`.
+- `raw({ columnNames: true })` works, and duplicate column names survive
+  (`SELECT u.id, p.id`).
+- `SELECT 3.0` comes back as the JS number `3`, indistinguishable from an
+  integer.
+- Errors: the thrown error's `cause` carries SQLite's text **including the
+  extended result code**, e.g. `NOT NULL constraint failed: users.email:
+  SQLITE_CONSTRAINT (extended: SQLITE_CONSTRAINT_NOTNULL)`. Other errors end
+  in the primary code: `D1_ERROR: near "SELEC": syntax error at offset 0:
+  SQLITE_ERROR`.
+- Foreign keys are enforced.
+- A batch with a failing statement rolls back the statements before it.
 
 ### sqlx-query
 
@@ -158,8 +196,10 @@ sqlx-query works with no change on its side.
 
 ## 4. Crate shape
 
-Single crate to start; split later only if a second one earns it (e.g. a test
-Worker, §10).
+**One crate at the repository root: no Cargo workspace and no `crates/`
+directory.** The test Worker is a separate package under `tests/worker/`.
+It isn't a workspace member, has its own lockfile, and is excluded from the
+published crate.
 
 ```
 sqlx-cloudflare-d1/
@@ -170,18 +210,23 @@ sqlx-cloudflare-d1/
     connection.rs     # D1Connection, ConnectOptions (D1ConnectOptions)
     executor.rs       # impl Executor for &mut D1Connection / &D1Connection
     arguments.rs      # D1Arguments, D1ArgumentValue
-    row.rs            # D1Row, D1Column
-    value.rs          # D1Value, D1ValueRef, D1TypeInfo
+    column.rs         # D1Column
+    row.rs            # D1Row, and assembling rows from a raw() result
+    value.rs          # D1Value, D1ValueRef, D1TypeInfo, the 2^53 check
     statement.rs      # D1Statement
     query_result.rs   # D1QueryResult
     transaction.rs    # D1TransactionManager (always errors, §7)
     batch.rs          # D1Connection::batch
-    error.rs          # D1DatabaseError, ErrorKind mapping
+    error.rs          # D1DatabaseError, code()/ErrorKind mapping
     js.rs             # the only module that touches JsValue/wasm_bindgen
     types/            # Encode/Decode/Type impls, one file per family
       mod.rs  int.rs  float.rs  bool.rs  str.rs  bytes.rs
-      uuid.rs chrono.rs time.rs json.rs   # feature-gated
-    query.rs          # impl sqlx_query::QueryDialect for D1 (feature)
+      uuid.rs chrono.rs time.rs json.rs   # feature-gated (not yet)
+    query.rs          # impl sqlx_query::QueryDialect for D1 (not yet)
+  tests/
+    facade.rs         # a consumer's view through `sqlx`; compile-level
+    d1.rs             # drives the test Worker; skips without D1_WORKER_URL
+    worker/           # the test Worker: scenarios, wrangler.toml, fixture
 ```
 
 ### Public surface
@@ -193,16 +238,24 @@ pub struct D1Connection { /* SendWrapper<worker::D1Database> */ }
 impl D1Connection {
     pub fn new(db: worker::D1Database) -> Self;
     pub fn from_env(env: &worker::Env, binding: &str) -> worker::Result<Self>;
-    pub async fn batch<'q>(&mut self, queries: impl IntoIterator<Item = sqlx::query::Query<'q, D1, D1Arguments>>)
-        -> Result<Vec<D1QueryResult>, sqlx::Error>;   // §7
+    pub fn batch<'q, I>(&self, queries: I)
+        -> impl Future<Output = Result<Vec<D1QueryResult>, sqlx::Error>> + Send + '_
+    where I: IntoIterator<Item = sqlx::query::Query<'q, D1, D1Arguments>>;   // §7
     pub fn into_inner(self) -> worker::D1Database;
 }
 ```
 
-Implement `Executor` for **both** `&mut D1Connection` (what sqlx code expects)
-and `&D1Connection`. The binding is stateless and shared, so a shared-reference
-executor is honest and lets handlers use one connection across concurrent
-queries without `&mut` gymnastics. Decide whether to also `impl Clone`.
+`batch` takes `&self` rather than `&mut self`, because the binding is
+stateless. It returns an explicit `Send` future instead of being an
+`async fn`: an `async fn` holding a `JsFuture` would be `!Send`, and axum
+handlers need `Send` futures.
+
+`Executor` is implemented for **both** `&mut D1Connection` (what sqlx code
+expects) and `&D1Connection`. The `&mut` impl delegates to the shared one.
+The binding is stateless and shared, so a shared-reference executor is honest
+and lets handlers use one connection across concurrent queries without `&mut`
+gymnastics. `Clone` is **not** implemented for now: `&D1Connection` covers
+sharing, and cloning would need a JS handle clone.
 
 ---
 
@@ -210,13 +263,17 @@ queries without `&mut` gymnastics. Decide whether to also `impl Clone`.
 
 Every sqlx trait demands `Send`; every JS handle and `JsFuture` is `!Send`.
 
-**Decision:** wrap at the boundary with `worker::send::SendWrapper` (for held
-handles) and `SendFuture` (for every future returned from a trait method). Do
-not sprinkle `unsafe impl Send` on our own types — if a type needs it, it holds
-a `SendWrapper`. This is sound only because Workers are single-threaded; put a
-`compile_error!` or doc note on non-wasm32 so nobody runs it on a threaded host
-by accident. Keep all `JsValue` handling in `js.rs` so the unsafety has one
-address.
+**Decision:** wrap every future returned from a trait method in
+`worker::send::SendFuture`. That happens in `executor.rs` and `batch.rs`,
+once per method, so `js.rs` never has to know about sqlx's bounds. The held
+handle needs nothing, because `worker::D1Database` is already `Send + Sync`
+(§3). There is no `unsafe impl Send` anywhere in this crate. This is sound
+only because Workers are single-threaded. The crate has to compile on the
+host for tests, so there's no `compile_error!`; the crate docs say instead
+not to use it from a threaded host. All `JsValue` handling stays in `js.rs`.
+
+`tests/facade.rs` asserts that the futures from `fetch_one`, `execute`,
+`query_scalar` and `batch` are `Send`.
 
 ---
 
@@ -238,9 +295,11 @@ pub enum D1ArgumentValue {
 
 Owned rather than borrowed: sqlx 0.9's `Arguments` has no lifetime, and the
 conversion to `JsValue` happens once, at execute time, in `js.rs`. Blobs go
-across as `Uint8Array`; check what D1 accepts (`worker` uses
-`serde_wasm_bindgen::to_value(&[u8])`, which yields a JS array of numbers, not
-a `Uint8Array` — verify which one D1 stores as BLOB).
+across as an `ArrayBuffer`, which D1 stores as BLOB (verified, §3). They come
+back as a JS array of numbers; `js.rs` also accepts `ArrayBuffer` and
+`Uint8Array` in case production differs. `Database::ArgumentBuffer` is
+`Vec<D1ArgumentValue>` itself. A failed `add` truncates back to its
+starting length, so a refused bind can't shift later placeholders.
 
 Placeholders: D1 accepts `?` and `?NNN`. The default
 `Arguments::format_placeholder` (`?`) is correct.
@@ -256,28 +315,37 @@ Pick the JS call per path:
 | sqlx path | D1 call | Why |
 |---|---|---|
 | `fetch_many` / `fetch` / `fetch_all` | `raw({ columnNames: true })` | ordinal access, duplicate column names survive |
-| `fetch_optional` | same, take the first row | `first()` returns an object and loses duplicates |
-| `execute` | `run()` | only `meta` is needed |
+| `fetch_optional` | same, convert only the first row | `first()` returns an object and loses duplicates |
+| `execute` / `execute_many` (overridden) | `run()` | only `meta` is needed |
 
-**`raw({ columnNames: true })` is not bound by `worker-sys`**, so declare it in
-`js.rs`:
+`execute` and `execute_many` override sqlx's defaults, which would go through
+`fetch_many`. `raw()` reports no `meta`, so **`fetch_many` yields rows only
+and never a `D1QueryResult`**: a fake zero would be worse than nothing. A
+`RETURNING` statement goes through the fetch path for its rows; call
+`execute` if you need `rows_affected`.
+
+**`raw({ columnNames: true })` is not bound by `worker-sys`**, so `js.rs`
+declares it. The obvious extern, a `method` on `worker-sys`'s
+`D1PreparedStatement`, **does not compile**: `wasm_bindgen` generates an
+inherent `impl` on a foreign type, which the orphan rule forbids (E0116).
+Declare a local type for the same JS object instead and cast to it.
+Structural lookup makes the cast free:
 
 ```rust
 #[wasm_bindgen]
 extern "C" {
+    #[wasm_bindgen(extends = Object)]
+    type Statement;
+
     #[wasm_bindgen(method, catch, js_name = raw)]
-    fn raw_with_options(this: &D1PreparedStatementSys, opts: &JsValue) -> Result<Promise, JsValue>;
+    fn raw_with_options(this: &Statement, options: &JsValue) -> Result<Promise, JsValue>;
 }
+// statement.unchecked_ref::<Statement>().raw_with_options(&options)
 ```
 
-The first returned row is the column names; the rest are value arrays. The
-fallback, `all()` + object keys, is acceptable only if the extern proves
-impossible — it silently collapses `SELECT a.id, b.id`, which `SELECT *` over a
-join produces.
-
-Neither call returns `meta` alongside `raw()`. If `execute` on a
-`RETURNING` statement needs both rows and `rows_affected`, use `all()` and
-document the duplicate-name caveat for that path, or count rows.
+The first returned row is the column names; the rest are value arrays. Verified
+locally (§3). The fallback, `all()` plus object keys, would silently collapse
+`SELECT a.id, b.id`.
 
 ### Rows, columns, types
 
@@ -290,12 +358,20 @@ document the duplicate-name caveat for that path, or count rows.
   no fractional part → `Integer`, else `Real`; `string` → `Text`;
   `ArrayBuffer`/array → `Blob`; `null` → `Null`; `boolean` → `Integer`).
   A column's `type_info` is that of its first non-null value, or `Null`.
-- `type_compatible` must be permissive in the SQLite way: `i64` decodes from
-  `Integer` and from a `Real` with no fraction; `f64` from both; `bool` from
-  `Integer` 0/1; `String` from `Text` only.
+  A `number` counts as `Integer` only if it is whole **and** within
+  ±(2^53 − 1). A larger whole number is no longer exact, so it is `Real`.
+- Compatibility lives in each `Type::compatible`, and the matching `Decode`
+  accepts exactly the same storage classes. Since whole safe numbers are
+  always `Integer`, `i64` needs only `Integer`. `f64` accepts `Real` and
+  `Integer`. `bool` accepts `Integer`, and any non-zero value is `true`, as
+  in sqlx-sqlite. `String` accepts `Text` only. Bytes accept `Blob` and
+  `Text`, as in sqlx-sqlite.
+- Lookup by name returns the **last** column with that name. That matches
+  sqlx-sqlite, whose name map lets the later insert win.
 - `D1QueryResult { rows_affected: u64, last_insert_rowid: Option<i64> }` from
   `meta.changes` / `meta.last_row_id`. `Extend` sums `rows_affected` and keeps
-  the last rowid.
+  the last rowid that was *reported*, so a trailing statement without one
+  doesn't erase an earlier one.
 
 ### Prepare and describe
 
@@ -303,8 +379,10 @@ document the duplicate-name caveat for that path, or count rows.
   `parameters() = None` and no columns. D1 has no server-side prepare that
   reports metadata. Consider counting `?`s for `Some(Right(n))`; only if it is
   exact (respect quoting — sqlx-query's lexer is the reference).
-- `describe` returns `Err(sqlx::Error::Protocol(..))` or a dedicated
-  "unsupported" error. Only the macros need it (non-goal).
+- `describe` returns `Err(sqlx::Error::Protocol(..))`. Only the macros need
+  it (non-goal). Everything D1 can't do goes through one helper,
+  `error::unsupported`, which returns `Protocol`, the nearest sqlx variant.
+  `begin` uses it too, so the choice can change in one place.
 
 ### ConnectOptions
 
@@ -328,6 +406,10 @@ docs: `conn.begin()` compiles and fails at runtime, so code that uses
 `D1PreparedStatement`, and calls `D1Database::batch` — atomic, all-or-nothing,
 in one round trip. Returns one `D1QueryResult` per statement. Whether to also
 return rows per statement (for `RETURNING` in a batch) is open; start without.
+
+`start_rollback` is a quiet no-op, not an error. `Transaction`'s `Drop` calls
+it after a failed `begin` too, because it can't tell a failed begin from an
+abandoned transaction.
 
 ---
 
@@ -382,17 +464,24 @@ feature enabled in `dev-dependencies`).
 ### Errors
 
 `D1DatabaseError { message: String }` implementing `sqlx::error::DatabaseError`.
-D1 surfaces SQLite's messages (`D1Error::cause()`), so map `kind()` from them
-the way sqlx-sqlite maps extended result codes:
+The message is the thrown error's `message`, plus its `cause`'s message when
+that adds anything. `worker` is bypassed here: `js.rs` reads the JS error
+directly.
 
-- `UNIQUE constraint failed` → `ErrorKind::UniqueViolation`
-- `FOREIGN KEY constraint failed` → `ForeignKeyViolation`
-- `NOT NULL constraint failed` → `NotNullViolation`
-- `CHECK constraint failed` → `CheckViolation`
-- otherwise `Other`
+D1's text ends with SQLite's result code by name (§3), so:
 
-Message matching is brittle; keep the table in one place and test it against
-real D1 output.
+- `code()` returns the extended code when present
+  (`SQLITE_CONSTRAINT_NOTNULL`), otherwise the last `SQLITE_*` word.
+- `kind()` maps from the extended code the way sqlx-sqlite does:
+  `…_UNIQUE`/`…_PRIMARYKEY` → `UniqueViolation`, `…_FOREIGNKEY` →
+  `ForeignKeyViolation`, `…_NOTNULL` → `NotNullViolation`, `…_CHECK` →
+  `CheckViolation`. If there's no extended code, it falls back to SQLite's
+  constraint text (`UNIQUE constraint failed`, …), and otherwise returns
+  `Other`.
+
+Both mappings live in `error.rs` and nowhere else. Unit tests use the
+messages local D1 actually produced, and the `constraint_errors` scenario
+checks all four kinds against a live local D1.
 
 ### Testing
 
@@ -403,40 +492,50 @@ Two layers:
    table, `D1Arguments`, placeholder counting. Structure the code so these are
    pure Rust over `D1ArgumentValue` / `D1Value`, with `js.rs` the only
    conversion point.
-2. **Integration tests against local D1.** A test Worker crate (for example
-   `tests/worker/`, not published) exposes one route per scenario, and runs
-   under `wrangler dev --local` with a D1 binding and a migration fixture.
-   `cargo test` on the host drives it over HTTP and asserts on JSON. Decide
-   early whether this beats `@cloudflare/vitest-pool-workers`; the constraint is
-   that CI must run it with no Cloudflare account.
+2. **Integration tests against local D1.** **Decided:** `wrangler dev
+   --local` driven from `cargo test`, not vitest-pool-workers. That keeps the
+   harness and the assertions in Rust, with no npm project. The test Worker
+   (`tests/worker/`, not published) has one scenario per function, and each
+   one asserts *inside* the Worker. `GET /` lists the scenarios and
+   `GET /<name>` returns `{"ok": bool, "error"?}`. `tests/d1.rs` walks the
+   list and reports every failure, and skips itself unless `D1_WORKER_URL` is
+   set. `make test-worker` (`tests/worker/run.sh`) runs `worker-build`,
+   applies the migration fixture to a fresh temporary `--persist-to` state,
+   starts wrangler, and runs the test. No Cloudflare account is needed, and
+   CI runs it.
 
-Scenarios to cover: every type in §8 round-tripping, NULLs, duplicate column
-names, empty results, `fetch_optional` on none/one/many, `execute`
-`rows_affected` and `last_insert_rowid`, constraint errors → `ErrorKind`, batch
-atomicity (a failing statement rolls back the others), `begin()` erroring,
-integers at ±2^53, and `#[derive(sqlx::FromRow)]` on a struct.
+Scenarios covered so far (all pass): literals, binding every primitive,
+NULLs, whole `REAL` → `f64`, blob round trip, integers at ±(2^53 − 1) and
+refusal at 2^53, duplicate column names, empty results, `fetch_optional` on
+none/many, `execute` `rows_affected` and `last_insert_rowid`, all four
+constraint kinds, batch per-statement results, batch atomicity, `begin()`
+erroring, and `#[derive(sqlx::FromRow)]`. Still to add: the feature-gated
+types in §8.
+
+Caveat: a scenario that panics (for example `row.get` on a bad decode) traps
+the Worker. The host test then reports the error page instead of the
+assertion message. Prefer `try_get` and `ensure(..)` in scenarios.
 
 ---
 
 ## 11. Build order
 
-Each step ends green (`make check`, `make test`, clippy).
+Each step ends green (`make check`, `make lint`, `make test`, `make
+test-worker`, `make doc-check`).
 
-1. **Scaffold.** Workspace, toolchain and tooling mirrored from
+1. ✅ **Scaffold.** Single crate, toolchain and tooling mirrored from
    `sqlx-contrib/sqlx-query` (§12). `cargo check --target
    wasm32-unknown-unknown` in CI from day one — the target is the point.
-2. **Types that compile.** Every associated type of `Database` with the
-   minimum to satisfy the bounds; `Executor` methods returning
-   `unimplemented`-style errors (not `todo!()` panics). Proves the trait
-   graph and the `Send` strategy before any JS.
-3. **First query end to end.** `js.rs`, `fetch_optional`, `D1Row`,
-   `Decode` for `i64` and `String`, the test Worker, and one integration test
-   running `SELECT 1 AS n, 'x' AS s` under `wrangler dev`.
-4. **The rest of the fetch path.** `fetch_many` via `raw({columnNames: true})`,
+2. ✅ **Types that compile.** Every associated type of `Database` with the
+   minimum to satisfy the bounds. Proves the trait graph and the `Send`
+   strategy before any JS.
+3. ✅ **First query end to end.** `js.rs`, `fetch_optional`, `D1Row`,
+   `Decode` for `i64` and `String`, the test Worker, and the harness.
+4. ✅ **The rest of the fetch path.** `fetch_many` via `raw({columnNames: true})`,
    `execute` via `run()`, `D1QueryResult`, the remaining primitive types.
-5. **Errors.** `D1DatabaseError`, the `ErrorKind` table.
+5. ✅ **Errors.** `D1DatabaseError`, `code()`, the `ErrorKind` mapping.
 6. **Feature-gated types.** `uuid`, `chrono`, `time`, `json`.
-7. **`batch` and the transaction error.**
+7. ✅ **`batch` and the transaction error.**
 8. **`sqlx-query` feature.**
 9. **Docs, README, release.** Crate docs with a full Worker example; the
    caveats (no pool, no transactions, no macros, 2^53, whole-result fetch)
@@ -454,17 +553,21 @@ is useful on its own.
 Match `sqlx-contrib/sqlx-query` (read its `Cargo.toml`, `Makefile`,
 `flake.nix`, `.devcontainer/`, `.github/workflows/`, `clippy.toml`):
 
-- Cargo workspace, `edition = "2021"`, `license = "MIT"`, literal crate
-  versions (release-please's cargo-workspace plugin cannot read
-  `version.workspace = true`).
-- `[workspace.lints.clippy] all` and `pedantic` at `deny`, `priority = -1`.
-- `rust-toolchain.toml` pinned as sqlx-query pins it (sqlx 0.9 needs ≥ 1.94),
-  **plus** `targets = ["wasm32-unknown-unknown"]`.
-- Nix flake dev shell built from `rust-toolchain.toml` via rust-overlay; add
-  `wrangler` and Node for the integration tests. A Nix `rust-minimal` toolchain
-  without the wasm target will fail with *"can't find crate for `core`"* —
-  make sure the shell's toolchain includes it.
-- Dev Container using the same flake.
+- **A single crate at the repo root, not a workspace** (this differs from
+  sqlx-query). `edition = "2021"`, `license = "MIT"`. release-please manages
+  package `"."`.
+- `[lints.clippy] all` and `pedantic` at `deny`, `priority = -1`.
+- `rust-toolchain.toml` pinned as sqlx-query pins it (1.95.0; sqlx 0.9 needs
+  ≥ 1.94), **plus** `targets = ["wasm32-unknown-unknown"]`.
+- Nix flake dev shell built from `rust-toolchain.toml` via rust-overlay, plus
+  `worker-build`, `wrangler` and Node for the integration tests. No
+  `wasm-bindgen-cli`: nixpkgs' version (0.2.127) lags the locked library
+  (0.2.128) and they must match exactly, while `worker-build` fetches the
+  matching one itself. No `devcontainer-env` either: it rewrites database
+  service URLs, this repo has no services, and without Docker it errors.
+- Dev Container using the same flake, as a plain image with no compose file.
+- `make check` and `make lint` run on both the host and wasm32:
+  `cfg(target_arch = "wasm32")` code is invisible to a host-only run.
 - Makefile targets run bare, inside the dev shell.
 - Conventional commits (`feat:`, `fix:`, `feat!:`), release-please.
 - Comments explain *why*, at the density sqlx-query uses.
@@ -473,23 +576,34 @@ Match `sqlx-contrib/sqlx-query` (read its `Cargo.toml`, `Makefile`,
 
 ## 13. Open questions
 
-1. **Blob representation.** `Uint8Array` or a JS array of numbers — which one
-   does D1 store as BLOB, and which does it return?
-2. **`raw({ columnNames: true })` from Rust.** Confirm the extern in §6 works
-   against the `D1PreparedStatementSys` that `D1PreparedStatement::inner()`
-   exposes, in `wrangler dev` and in production.
-3. **Depend on `sqlx-core` or `sqlx`?** `sqlx-core` is what drivers use, but
-   consumers name `sqlx::Database`; the types must be the same. sqlx re-exports
-   core, so either works as long as versions unify — pick one and test that a
-   consumer using `sqlx = { default-features = false, features = ["derive"] }`
-   sees our `D1` as an `sqlx::Database`.
+Resolved:
+
+- ~~**Blob representation.**~~ Bind an `ArrayBuffer`, which is stored as
+  BLOB. D1 returns a JS array of numbers (§3, locally).
+- ~~**`raw({ columnNames: true })` from Rust.**~~ Works locally, through a
+  local extern type, because the sketched extern violates the orphan rule
+  (§6).
+- ~~**Depend on `sqlx-core` or `sqlx`?**~~ `sqlx-core` with `offline` always
+  on (§3). `tests/facade.rs` proves that a consumer on the `sqlx` facade,
+  with sqlx's default `macros` feature, sees `D1` as an `sqlx::Database`,
+  including `FromRow` and executor-generic code.
+- ~~**Test harness.**~~ `wrangler dev --local` plus `cargo test` (§10).
+
+Open:
+
+1. **Production.** Everything in §3's "D1 behaviour" was observed on local
+   workerd only. Check `raw({ columnNames: true })`, the blob shapes and the
+   error text with extended codes against real D1 before 0.1.0.
+2. **`fetch_many` reports no `QueryResult`** (§6). Is that acceptable, or
+   should the fetch path switch to `all()` when a caller needs both rows and
+   `meta`?
+3. **`Clone` for `D1Connection`.** Not implemented; add it if a consumer needs
+   an owned handle per task.
 4. **D1 sessions / read replication.** `with_session` returns a
    `D1DatabaseSession` with its own `prepare`/`batch`. Worth an executor of its
    own later; out of scope for the first release.
-5. **Integers above 2^53.** Error (current plan), or offer an opt-in that
-   stores `i64` as `Text`?
-6. **Test harness.** `wrangler dev` + HTTP from `cargo test`, or
-   vitest-pool-workers (§10).
+5. **Integers above 2^53.** Error (current behaviour), or offer an opt-in
+   that stores `i64` as `Text`?
 
 ---
 
