@@ -44,7 +44,7 @@ log = { version = "0.4", default-features = false }
 # `#[derive(sqlx::FromRow)]` sees this crate's `D1` -- see `tests/facade.rs`.
 # `macros` is sqlx's default, and the one that turns on `sqlx-core/offline`.
 sqlx = { version = "0.9", default-features = false, features = ["derive", "macros"] }
-# `tests/d1.rs` drives the test Worker over plain HTTP on localhost, so no TLS.
+# `tests/driver.rs` drives the test Worker over plain HTTP on localhost, so no TLS.
 ureq = { version = "3", default-features = false }
 serde_json = "1"
 

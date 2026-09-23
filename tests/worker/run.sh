@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Builds the test Worker, serves it with `wrangler dev --local` on a fresh
-# local D1, and runs `tests/d1.rs` against it. What `make test-worker` runs.
+# local D1, and runs `tests/driver.rs` against it. What `make test-worker` runs.
 #
 # Fresh means a temporary `--persist-to` directory: the scenarios assume the
 # fixture schema and nothing else, and a database left over from the last run
@@ -31,4 +31,4 @@ for _ in $(seq 1 60); do
 done
 
 cd ../..
-D1_WORKER_URL="http://localhost:$port" cargo test --test d1 -- --nocapture
+D1_WORKER_URL="http://localhost:$port" cargo test --test driver -- --nocapture

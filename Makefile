@@ -9,7 +9,7 @@
 # run. `make check` covers both targets, because a build that is only ever
 # checked on the host says nothing about the one target that matters.
 #
-# `make test` needs no Worker: tests/d1.rs skips itself unless D1_WORKER_URL
+# `make test` needs no Worker: tests/driver.rs skips itself unless D1_WORKER_URL
 # is set. `make test-worker` builds and serves the test Worker and sets it.
 
 WASM := --target wasm32-unknown-unknown

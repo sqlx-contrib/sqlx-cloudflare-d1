@@ -3,7 +3,7 @@
 //!
 //! `GET /` lists the scenarios; `GET /<scenario>` runs one and answers
 //! `{"ok": true}` or `{"ok": false, "error": "..."}`. The assertions live here,
-//! in Rust next to the code they exercise, and `tests/d1.rs` on the host only
+//! in Rust next to the code they exercise, and `tests/driver.rs` on the host only
 //! has to walk the list -- so adding a scenario is one function and one line
 //! in `SCENARIOS`.
 
