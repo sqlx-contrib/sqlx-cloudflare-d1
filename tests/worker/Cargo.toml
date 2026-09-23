@@ -1,0 +1,20 @@
+# The Worker the integration tests run against. Not part of the published
+# crate, and its own package rather than a workspace member: it only builds
+# for wasm32-unknown-unknown, through `worker-build`, and keeps its own lock.
+[package]
+name = "sqlx-cloudflare-d1-test-worker"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+sqlx-cloudflare-d1 = { path = "../.." }
+sqlx = { version = "0.9", default-features = false, features = ["derive", "macros"] }
+worker = { version = "0.8.6", features = ["d1"] }
+serde_json = "1"
+
+[profile.release]
+opt-level = "s"
