@@ -7,8 +7,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 > [!NOTE]
-> **Pre-release.** Not on crates.io yet, and the API may still move. See
-> [DESIGN.md](DESIGN.md) for what is built, what is decided and what is open.
+> **Pre-release.** Not on crates.io yet, and the API may still move.
 
 ```rust
 use sqlx_cloudflare_d1::{D1Connection, D1};
