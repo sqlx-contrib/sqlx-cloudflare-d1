@@ -1,0 +1,12 @@
+[toolchain]
+# sqlx 0.9 forces 1.94 as the floor. This is the *dev* toolchain and is
+# deliberately pinned: naming it means `cargo` picks the same compiler here, in
+# the Dev Container and in CI, even when the machine's default stable is older.
+channel = "1.95.0"
+components = ["rustfmt", "clippy", "rust-src", "rust-analyzer"]
+# The target is the point of this crate: it only runs inside a Worker. Named
+# here so rustup, and the Nix shell built from this file, install its `core`
+# -- without it, `cargo check --target wasm32-unknown-unknown` fails with
+# "can't find crate for `core`".
+targets = ["wasm32-unknown-unknown"]
+profile = "minimal"

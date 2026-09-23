@@ -1,0 +1,53 @@
+[package]
+name = "sqlx-cloudflare-d1"
+description = "A Cloudflare D1 driver for sqlx: an sqlx::Database over the Workers D1 binding"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/sqlx-contrib/sqlx-cloudflare-d1"
+readme = "README.md"
+keywords = ["sqlx", "cloudflare", "d1", "workers", "sqlite"]
+categories = ["database", "wasm"]
+# The test Worker and the dev tooling are not part of the library.
+exclude = ["tests/worker", ".github", ".devcontainer", "flake.nix", "flake.lock", "Makefile"]
+
+# Denied rather than warned, to match the rest of this ecosystem: a lint this
+# crate tolerates is a lint its consumers cannot. `priority = -1` lets an
+# individual `allow` override the group.
+[lints.clippy]
+all = { level = "deny", priority = -1 }
+pedantic = { level = "deny", priority = -1 }
+
+[features]
+default = []
+
+[dependencies]
+# `sqlx-core`, not `sqlx`: it is what drivers build on, and `sqlx` re-exports
+# it, so a consumer's `sqlx::Database` is this crate's
+# `sqlx_core::database::Database` as long as the two resolve to one version.
+#
+# `offline` is always on. sqlx's own default `macros` feature enables
+# `sqlx-core/offline`, which adds `describe` to `Executor` as a *required*
+# method -- so a driver that only implemented it behind a feature of its own
+# would stop compiling the moment a consumer kept sqlx's defaults.
+sqlx-core = { version = "0.9", default-features = false, features = ["offline"] }
+worker = { version = "0.8.6", default-features = false, features = ["d1"] }
+wasm-bindgen = "0.2"
+js-sys = "0.3"
+futures-core = { version = "0.3", default-features = false }
+futures-util = { version = "0.3", default-features = false, features = ["alloc"] }
+# Only for `log::LevelFilter`, which `ConnectOptions` names in its signatures.
+log = { version = "0.4", default-features = false }
+
+[dev-dependencies]
+# The facade, only to prove that a consumer naming `sqlx::Database` and using
+# `#[derive(sqlx::FromRow)]` sees this crate's `D1` -- see `tests/facade.rs`.
+# `macros` is sqlx's default, and the one that turns on `sqlx-core/offline`.
+sqlx = { version = "0.9", default-features = false, features = ["derive", "macros"] }
+# `tests/d1.rs` drives the test Worker over plain HTTP on localhost, so no TLS.
+ureq = { version = "3", default-features = false }
+serde_json = "1"
+
+[package.metadata.docs.rs]
+all-features = true
+targets = ["wasm32-unknown-unknown"]
