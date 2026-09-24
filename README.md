@@ -32,6 +32,21 @@ async fn fetch(_req: worker::Request, env: worker::Env, _ctx: worker::Context) -
 }
 ```
 
+## Install
+
+```toml
+[dependencies]
+sqlx-cloudflare-d1 = "0.1"
+sqlx = { version = "0.9", default-features = false, features = ["derive"] }
+worker = { version = "0.8", features = ["d1"] }
+```
+
+| sqlx-cloudflare-d1 | sqlx | worker | Rust |
+|---|---|---|---|
+| 0.1 | 0.9 | 0.8 | 1.94+ |
+
+The crate runs on `wasm32-unknown-unknown`, inside a Worker.
+
 ## Limitations
 
 - **No `query!` / `query_as!` macros.** sqlx's macros only know its built-in
@@ -42,7 +57,14 @@ async fn fetch(_req: worker::Request, env: worker::Env, _ctx: worker::Context) -
 - **No `sqlx::Pool`.** Nothing to pool: build a connection per request from
   the binding.
 - **Integers are limited to ±(2^53 − 1).** D1 passes values as JavaScript
-  numbers, so a wider `i64` is refused rather than silently rounded.
+  numbers, so a wider `i64` is refused rather than silently rounded. Note that
+  sqlx's `QueryBuilder::push_bind` panics on a refused value instead of
+  returning the error.
+- **No `sqlx::migrate!`.** Apply migrations with `wrangler d1 migrations`.
+- **No derived TEXT enums.** `#[derive(sqlx::Type)]` works for
+  `#[sqlx(transparent)]` newtypes and `#[repr(i32)]` enums, but sqlx only
+  generates string-backed enums for its built-in drivers.
+- **No statement logging.** `log_statements` is accepted and ignored.
 - **Results are not streamed.** D1 returns a whole result set at once.
 
 ## License

@@ -16,7 +16,13 @@ impl D1Connection {
     /// Returns what each statement did, in the order given; rows a statement
     /// returns are not reported.
     ///
-    /// ```ignore
+    /// ```no_run
+    /// # async fn transfer(
+    /// #     conn: &sqlx_cloudflare_d1::D1Connection,
+    /// #     amount: i64,
+    /// #     from: i64,
+    /// #     to: i64,
+    /// # ) -> Result<(), sqlx::Error> {
     /// let results = conn
     ///     .batch([
     ///         sqlx::query("UPDATE accounts SET balance = balance - ?1 WHERE id = ?2")
@@ -27,6 +33,8 @@ impl D1Connection {
     ///             .bind(to),
     ///     ])
     ///     .await?;
+    /// # Ok(())
+    /// # }
     /// ```
     ///
     /// # Errors
