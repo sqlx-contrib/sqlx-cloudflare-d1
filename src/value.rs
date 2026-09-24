@@ -12,12 +12,21 @@ use crate::D1;
 /// There is no declared column type to go on: D1 hands back JavaScript values,
 /// not SQLite's column metadata. So the type is read off each value as it
 /// arrives, and a column's type is the type of whatever is in it.
+///
+/// Non-exhaustive, like [`D1ArgumentValue`](crate::D1ArgumentValue): a new
+/// storage class must not break a `match` outside this crate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum D1TypeInfo {
+    /// A `NULL` value, or a column with no non-`NULL` value to type it by.
     Null,
+    /// A whole number within ±(2^53 − 1).
     Integer,
+    /// Any other number.
     Real,
+    /// A string.
     Text,
+    /// Bytes.
     Blob,
 }
 

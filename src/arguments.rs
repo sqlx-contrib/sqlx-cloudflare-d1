@@ -10,14 +10,22 @@ use crate::D1;
 ///
 /// Owned rather than borrowed: sqlx 0.9's `Arguments` has no lifetime, and the
 /// conversion to a JavaScript value happens once, when the query runs.
+///
+/// Non-exhaustive so that D1 growing a representation -- a `BigInt`, say --
+/// is not a breaking change for `Encode` impls outside this crate.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub enum D1ArgumentValue {
+    /// SQL `NULL`: JavaScript `null`.
     Null,
     /// Within ±(2^53 − 1), because D1 takes a JavaScript number and not a
     /// `BigInt` -- anything wider would be rounded on the way in.
     Integer(i64),
+    /// A JavaScript number, stored as `REAL`.
     Real(f64),
+    /// A JavaScript string, stored as `TEXT`.
     Text(String),
+    /// An `ArrayBuffer`, stored as `BLOB`.
     Blob(Vec<u8>),
 }
 
