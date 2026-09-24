@@ -5,6 +5,44 @@
 //! `sqlx::query`, `sqlx::query_as`, `#[derive(sqlx::FromRow)]`, `Executor` --
 //! runs inside a Rust Worker with the database type swapped.
 //!
+//! ```no_run
+//! use sqlx_cloudflare_d1::{D1Connection, D1};
+//!
+//! #[derive(sqlx::FromRow)]
+//! struct User {
+//!     id: i64,
+//!     name: String,
+//! }
+//!
+//! async fn user(env: &worker::Env, id: i64) -> Result<User, Box<dyn std::error::Error>> {
+//!     // One connection per request, straight from the binding.
+//!     let conn = D1Connection::from_env(env, "DB")?;
+//!
+//!     let user = sqlx::query_as::<D1, User>("SELECT id, name FROM users WHERE id = ?")
+//!         .bind(id)
+//!         .fetch_one(&conn)
+//!         .await?;
+//!
+//!     Ok(user)
+//! }
+//! ```
+//!
+//! # What D1 cannot do
+//!
+//! Each of these fails loudly rather than pretending:
+//!
+//! - **Transactions.** `begin()` returns an error; D1 cannot hold a
+//!   transaction open across calls. [`D1Connection::batch`] runs several
+//!   statements atomically in one round trip instead.
+//! - **Integers beyond ±(2^53 − 1).** D1 passes values as JavaScript numbers,
+//!   so binding a wider `i64` is an encode error rather than a rounded value.
+//!   See [`types`].
+//! - **`query!` and `describe`.** sqlx's macros only know its built-in
+//!   drivers, and D1 cannot describe a statement without running it.
+//!
+//! There is no `sqlx::Pool` either -- a binding has nothing to pool -- and no
+//! `sqlx::migrate!`: apply migrations with `wrangler d1 migrations`.
+//!
 //! This crate only *runs* on `wasm32-unknown-unknown`, inside a Worker. It
 //! compiles on other targets so that docs, unit tests and `cargo check` work,
 //! but its `Send` impls lean on Workers being single-threaded: do not call it
