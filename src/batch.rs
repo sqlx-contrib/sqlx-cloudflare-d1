@@ -51,7 +51,16 @@ impl D1Connection {
             .collect::<Result<Vec<_>, Error>>();
 
         SendFuture::new(async move {
-            let statements = queries?
+            let queries = queries?;
+
+            // D1 rejects an empty batch -- "No SQL statements detected" --
+            // but running nothing has nothing to report, and needs no round
+            // trip to find that out.
+            if queries.is_empty() {
+                return Ok(Vec::new());
+            }
+
+            let statements = queries
                 .iter()
                 .map(|(sql, arguments)| js::prepare(&self.db, sql.as_str(), arguments.values()))
                 .collect::<Result<Vec<_>, _>>()?;
