@@ -3,6 +3,8 @@ name = "sqlx-cloudflare-d1"
 description = "A Cloudflare D1 driver for sqlx: an sqlx::Database over the Workers D1 binding"
 version = "0.1.0"
 edition = "2021"
+# sqlx 0.9's own floor; see rust-toolchain.toml.
+rust-version = "1.94"
 license = "MIT"
 repository = "https://github.com/sqlx-contrib/sqlx-cloudflare-d1"
 readme = "README.md"
