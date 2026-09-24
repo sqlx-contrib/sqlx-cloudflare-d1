@@ -10,6 +10,7 @@
 use std::future::Future;
 use std::pin::Pin;
 
+use futures_util::future::try_join;
 use sqlx::error::ErrorKind;
 use sqlx::{Connection, Row};
 use sqlx_cloudflare_d1::{D1Connection, D1};
@@ -42,6 +43,15 @@ scenarios![
     batch_is_atomic,
     begin_fails,
     from_row,
+    invalid_sql_is_an_error,
+    wrong_argument_count_is_an_error,
+    empty_batch,
+    batch_with_unencodable_argument_runs_nothing,
+    text_edge_cases,
+    blob_edge_cases,
+    concurrent_queries_share_a_connection,
+    query_builder_bulk_insert,
+    derived_types,
 ];
 
 #[event(fetch)]
@@ -403,4 +413,211 @@ async fn from_row(conn: &mut D1Connection) -> Outcome {
     ensure(user.active, "active")?;
     ensure(user.avatar.is_none(), "avatar")?;
     ensure(user.id > 0, "id")
+}
+
+// The reason `js` goes to `worker-sys` rather than `worker`: a statement D1
+// rejects must come back as an error, not abort the Worker. A panic here
+// would answer with an error page, which `tests/driver.rs` reports as such.
+async fn invalid_sql_is_an_error(conn: &mut D1Connection) -> Outcome {
+    let conn = &*conn;
+
+    for (sql, expected) in [
+        ("SELEC 1", "syntax error"),
+        ("SELECT * FROM missing", "no such table"),
+    ] {
+        match sqlx::query(sql).fetch_all(conn).await {
+            Err(sqlx::Error::Database(error)) if error.message().contains(expected) => {}
+            other => return Err(format!("{sql}: {other:?}")),
+        }
+    }
+
+    Ok(())
+}
+
+async fn wrong_argument_count_is_an_error(conn: &mut D1Connection) -> Outcome {
+    let conn = &*conn;
+
+    let too_few = sqlx::query("SELECT ?1, ?2").bind(1_i64).fetch_all(conn).await;
+    ensure(
+        matches!(too_few, Err(sqlx::Error::Database(_))),
+        format!("too few: {too_few:?}"),
+    )?;
+
+    let too_many = sqlx::query("SELECT ?")
+        .bind(1_i64)
+        .bind(2_i64)
+        .fetch_all(conn)
+        .await;
+    ensure(
+        matches!(too_many, Err(sqlx::Error::Database(_))),
+        format!("too many: {too_many:?}"),
+    )
+}
+
+async fn empty_batch(conn: &mut D1Connection) -> Outcome {
+    let results = conn
+        .batch(std::iter::empty::<sqlx::query::Query<'_, D1, _>>())
+        .await
+        .map_err(fail)?;
+
+    ensure(results.is_empty(), format!("{} results", results.len()))
+}
+
+// The encode error is caught before anything reaches D1, so not even the
+// statement ahead of the bad one runs.
+async fn batch_with_unencodable_argument_runs_nothing(conn: &mut D1Connection) -> Outcome {
+    let conn = &*conn;
+    reset(conn).await?;
+
+    let result = conn
+        .batch([
+            sqlx::query("INSERT INTO users (email) VALUES ('first@example.com')"),
+            sqlx::query("INSERT INTO numbers (value) VALUES (?)").bind(1_i64 << 53),
+        ])
+        .await;
+    ensure(
+        matches!(result, Err(sqlx::Error::Encode(_))),
+        format!("{result:?}"),
+    )?;
+
+    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM users")
+        .fetch_one(conn)
+        .await
+        .map_err(fail)?;
+    ensure(count == 0, format!("{count} users: the first insert ran"))
+}
+
+async fn text_edge_cases(conn: &mut D1Connection) -> Outcome {
+    let conn = &*conn;
+    let astral = "🦀 𝄞 \u{0} null byte";
+
+    let row = sqlx::query("SELECT ?1 AS empty, ?2 AS missing, ?3 AS astral")
+        .bind("")
+        .bind(Option::<&str>::None)
+        .bind(astral)
+        .fetch_one(conn)
+        .await
+        .map_err(fail)?;
+
+    ensure(
+        row.get::<Option<String>, _>("empty").as_deref() == Some(""),
+        "the empty string came back as NULL",
+    )?;
+    ensure(row.get::<Option<String>, _>("missing").is_none(), "NULL")?;
+    let back: String = row.get("astral");
+    ensure(back == astral, format!("read back {back:?}"))
+}
+
+async fn blob_edge_cases(conn: &mut D1Connection) -> Outcome {
+    let conn = &*conn;
+    reset(conn).await?;
+    let large: Vec<u8> = (0..256 * 1024).map(|i| (i % 251) as u8).collect();
+
+    for (email, bytes) in [("empty@example.com", Vec::new()), ("large@example.com", large)] {
+        sqlx::query("INSERT INTO users (email, avatar) VALUES (?, ?)")
+            .bind(email)
+            .bind(&bytes)
+            .execute(conn)
+            .await
+            .map_err(fail)?;
+
+        let row = sqlx::query("SELECT avatar, typeof(avatar) AS kind FROM users WHERE email = ?")
+            .bind(email)
+            .fetch_one(conn)
+            .await
+            .map_err(fail)?;
+
+        let kind: String = row.get("kind");
+        ensure(kind == "blob", format!("{email}: stored as {kind}"))?;
+        let back: Option<Vec<u8>> = row.try_get("avatar").map_err(fail)?;
+        ensure(
+            back.as_ref() == Some(&bytes),
+            format!("{email}: read back {:?} bytes", back.map(|b| b.len())),
+        )?;
+    }
+
+    Ok(())
+}
+
+// `&D1Connection` is an executor, so one connection can run queries side by
+// side within a request.
+async fn concurrent_queries_share_a_connection(conn: &mut D1Connection) -> Outcome {
+    let conn = &*conn;
+
+    let (a, b): (i64, String) = try_join(
+        sqlx::query_scalar("SELECT 1").fetch_one(conn),
+        sqlx::query_scalar("SELECT 'two'").fetch_one(conn),
+    )
+    .await
+    .map_err(fail)?;
+
+    ensure(a == 1 && b == "two", format!("got {a}, {b:?}"))
+}
+
+async fn query_builder_bulk_insert(conn: &mut D1Connection) -> Outcome {
+    let conn = &*conn;
+    reset(conn).await?;
+    let users = [("qb1@example.com", 10), ("qb2@example.com", 20), ("qb3@example.com", 30)];
+
+    let mut builder = sqlx::QueryBuilder::<D1>::new("INSERT INTO users (email, age) ");
+    builder.push_values(users, |mut row, (email, age)| {
+        row.push_bind(email).push_bind(age);
+    });
+    let inserted = builder.build().execute(conn).await.map_err(fail)?;
+    ensure(
+        inserted.rows_affected() == 3,
+        format!("rows_affected {}", inserted.rows_affected()),
+    )?;
+
+    let mut builder = sqlx::QueryBuilder::<D1>::new("SELECT SUM(age) FROM users WHERE email IN (");
+    let mut emails = builder.separated(", ");
+    for (email, _) in &users[..2] {
+        emails.push_bind(*email);
+    }
+    emails.push_unseparated(")");
+    let sum: i64 = builder
+        .build_query_scalar()
+        .fetch_one(conn)
+        .await
+        .map_err(fail)?;
+    ensure(sum == 30, format!("sum {sum}"))
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, sqlx::Type)]
+#[sqlx(transparent)]
+struct UserId(i64);
+
+#[derive(Debug, Clone, Copy, PartialEq, sqlx::Type)]
+#[repr(i32)]
+enum Role {
+    Reader = 1,
+    Writer = 2,
+}
+
+#[derive(Debug, sqlx::FromRow)]
+struct Member {
+    id: UserId,
+    role: Role,
+}
+
+async fn derived_types(conn: &mut D1Connection) -> Outcome {
+    let conn = &*conn;
+    let member = sqlx::query_as::<D1, Member>("SELECT ?1 AS id, ?2 AS role")
+        .bind(UserId(5))
+        .bind(Role::Writer)
+        .fetch_one(conn)
+        .await
+        .map_err(fail)?;
+
+    ensure(member.id == UserId(5), format!("id {:?}", member.id))?;
+    ensure(member.role == Role::Writer, format!("role {:?}", member.role))?;
+
+    let reader: Role = sqlx::query_scalar("SELECT 1")
+        .fetch_one(conn)
+        .await
+        .map_err(fail)?;
+    ensure(reader == Role::Reader, format!("1 decoded as {reader:?}"))?;
+
+    let unknown = sqlx::query_scalar::<D1, Role>("SELECT 3").fetch_one(conn).await;
+    ensure(unknown.is_err(), format!("3 decoded: {unknown:?}"))
 }
