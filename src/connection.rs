@@ -43,7 +43,14 @@ impl D1Connection {
     }
 
     /// The binding this connection wraps, for anything this crate does not
-    /// cover -- `dump`, `exec`, sessions.
+    /// cover -- `dump`, `exec`, sessions -- while keeping the connection.
+    #[must_use]
+    pub fn database(&self) -> &worker::D1Database {
+        &self.db
+    }
+
+    /// The binding this connection wraps, giving up the connection. See
+    /// [`database`](Self::database) to borrow it instead.
     #[must_use]
     pub fn into_inner(self) -> worker::D1Database {
         self.db
