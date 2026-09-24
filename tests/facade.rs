@@ -51,6 +51,44 @@ async fn count(conn: &D1Connection) -> Result<i64, sqlx::Error> {
         .await
 }
 
+// A consumer's own types, through sqlx's derives. These two expand to impls
+// generic over the database, so they reach `D1` with no help from this
+// crate. (Enums stored as TEXT do not: that derive only targets sqlx's
+// built-in drivers.)
+#[derive(Debug, Clone, Copy, sqlx::Type)]
+#[sqlx(transparent)]
+struct UserId(i64);
+
+#[derive(Debug, Clone, Copy, sqlx::Type)]
+#[repr(i32)]
+enum Role {
+    Reader = 1,
+    Writer = 2,
+}
+
+#[derive(Debug, sqlx::FromRow)]
+struct Member {
+    id: UserId,
+    role: Role,
+}
+
+async fn members(conn: &D1Connection, role: Role) -> Result<Vec<Member>, sqlx::Error> {
+    sqlx::query_as::<_, Member>("SELECT id, role FROM members WHERE role = ?")
+        .bind(role)
+        .fetch_all(conn)
+        .await
+}
+
+// Bulk inserts go through `QueryBuilder`, with `?` placeholders.
+async fn insert_members(conn: &D1Connection, ids: &[UserId]) -> Result<u64, sqlx::Error> {
+    let mut builder = sqlx::QueryBuilder::<D1>::new("INSERT INTO members (id, role) ");
+    builder.push_values(ids, |mut row, id| {
+        row.push_bind(*id).push_bind(Role::Reader);
+    });
+
+    Ok(builder.build().execute(conn).await?.rows_affected())
+}
+
 // Handlers need `Send` futures (axum, for one), even inside a Worker.
 fn assert_send<T: Send>(_: T) {}
 
@@ -58,6 +96,8 @@ fn futures_are_send(conn: &mut D1Connection) {
     assert_send(get_user(&mut *conn, 1));
     assert_send(rename(conn, 1, "x"));
     assert_send(count(conn));
+    assert_send(members(conn, Role::Writer));
+    assert_send(insert_members(conn, &[UserId(1)]));
     assert_send(conn.batch([sqlx::query("DELETE FROM users")]));
 }
 

@@ -32,3 +32,112 @@ mod bytes;
 mod float;
 mod int;
 mod str;
+
+// Through `Row::try_get`, as a consumer decodes: that runs `Type::compatible`
+// before `Decode`, and the two have to agree.
+#[cfg(test)]
+mod tests {
+    use std::borrow::Cow;
+    use std::sync::Arc;
+
+    use sqlx_core::arguments::Arguments;
+    use sqlx_core::decode::Decode;
+    use sqlx_core::row::Row;
+    use sqlx_core::types::Type;
+
+    use crate::value::D1ValueData;
+    use crate::{D1ArgumentValue, D1Arguments, D1Row, D1Value, D1};
+
+    fn get<T>(data: D1ValueData) -> Result<T, sqlx_core::error::Error>
+    where
+        T: for<'r> Decode<'r, D1> + Type<D1>,
+    {
+        let rows = D1Row::from_result(vec!["v".into()], vec![vec![D1Value(data)]]).unwrap();
+        rows[0].try_get("v")
+    }
+
+    fn encoded<'t, T: sqlx_core::encode::Encode<'t, D1> + Type<D1>>(value: T) -> D1ArgumentValue {
+        let mut arguments = D1Arguments::default();
+        arguments.add(value).unwrap();
+        arguments.values[0].clone()
+    }
+
+    #[test]
+    fn a_narrow_integer_that_does_not_fit_is_an_error() {
+        assert_eq!(get::<i32>(D1ValueData::Integer(5)).unwrap(), 5);
+        assert!(get::<i8>(D1ValueData::Integer(300)).is_err());
+        assert!(get::<u8>(D1ValueData::Integer(256)).is_err());
+        assert!(get::<u32>(D1ValueData::Integer(-1)).is_err());
+        assert_eq!(
+            get::<u32>(D1ValueData::Integer(4_294_967_295)).unwrap(),
+            u32::MAX
+        );
+    }
+
+    #[test]
+    fn any_non_zero_integer_is_true() {
+        assert!(!get::<bool>(D1ValueData::Integer(0)).unwrap());
+        assert!(get::<bool>(D1ValueData::Integer(1)).unwrap());
+        assert!(get::<bool>(D1ValueData::Integer(2)).unwrap());
+        assert!(get::<bool>(D1ValueData::Integer(-1)).unwrap());
+        assert!(get::<bool>(D1ValueData::Text("true".into())).is_err());
+    }
+
+    #[test]
+    fn floats_decode_from_integers_too() {
+        assert!((get::<f32>(D1ValueData::Integer(3)).unwrap() - 3.0).abs() < f32::EPSILON);
+        assert!((get::<f64>(D1ValueData::Real(0.25)).unwrap() - 0.25).abs() < f64::EPSILON);
+        assert!(get::<f64>(D1ValueData::Text("1.5".into())).is_err());
+    }
+
+    #[test]
+    fn bytes_decode_from_text_but_text_not_from_bytes() {
+        assert_eq!(
+            get::<Vec<u8>>(D1ValueData::Text("ab".into())).unwrap(),
+            b"ab"
+        );
+        assert_eq!(
+            get::<Vec<u8>>(D1ValueData::Blob(vec![0, 255])).unwrap(),
+            [0, 255]
+        );
+        assert!(get::<String>(D1ValueData::Blob(b"ab".to_vec())).is_err());
+    }
+
+    #[test]
+    fn nothing_converts_between_numbers_and_text() {
+        assert!(get::<String>(D1ValueData::Integer(1)).is_err());
+        assert!(get::<i64>(D1ValueData::Text("1".into())).is_err());
+        assert!(get::<i64>(D1ValueData::Real(1.5)).is_err());
+    }
+
+    #[test]
+    fn null_decodes_only_into_an_option() {
+        assert_eq!(get::<Option<String>>(D1ValueData::Null).unwrap(), None);
+        assert!(get::<String>(D1ValueData::Null).is_err());
+        assert!(get::<i64>(D1ValueData::Null).is_err());
+    }
+
+    #[test]
+    fn every_text_and_byte_container_encodes_the_same() {
+        let text = D1ArgumentValue::Text("x".into());
+        assert_eq!(encoded("x"), text);
+        assert_eq!(encoded(String::from("x")), text);
+        assert_eq!(encoded(Box::<str>::from("x")), text);
+        assert_eq!(encoded(Arc::<str>::from("x")), text);
+        assert_eq!(encoded(Cow::Borrowed("x")), text);
+
+        let blob = D1ArgumentValue::Blob(vec![1, 2]);
+        assert_eq!(encoded(&[1_u8, 2][..]), blob);
+        assert_eq!(encoded(vec![1_u8, 2]), blob);
+        assert_eq!(encoded(Box::<[u8]>::from([1_u8, 2])), blob);
+        assert_eq!(encoded(Arc::<[u8]>::from([1_u8, 2])), blob);
+    }
+
+    #[test]
+    fn narrow_numbers_encode_widened() {
+        assert_eq!(encoded(-7_i8), D1ArgumentValue::Integer(-7));
+        assert_eq!(encoded(u32::MAX), D1ArgumentValue::Integer(4_294_967_295));
+        assert_eq!(encoded(false), D1ArgumentValue::Integer(0));
+        assert_eq!(encoded(0.5_f32), D1ArgumentValue::Real(0.5));
+    }
+}

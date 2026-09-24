@@ -986,6 +986,7 @@ dependencies = [
 name = "sqlx-cloudflare-d1-test-worker"
 version = "0.0.0"
 dependencies = [
+ "futures-util",
  "serde_json",
  "sqlx",
  "sqlx-cloudflare-d1",

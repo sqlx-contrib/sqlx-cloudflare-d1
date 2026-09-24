@@ -15,6 +15,7 @@ sqlx-cloudflare-d1 = { path = "../.." }
 sqlx = { version = "0.9", default-features = false, features = ["derive", "macros"] }
 worker = { version = "0.8.6", features = ["d1"] }
 serde_json = "1"
+futures-util = { version = "0.3", default-features = false }
 
 [profile.release]
 opt-level = "s"
