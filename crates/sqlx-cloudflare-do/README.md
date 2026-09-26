@@ -84,8 +84,10 @@ one definition.
 - **No `query!` / `query_as!` macros.** sqlx's macros only know its built-in
   drivers. The runtime API (`sqlx::query`, `query_as`, `FromRow`) works.
 - **No transactions.** `sql.exec` rejects `BEGIN` and `SAVEPOINT`, so
-  `begin()` fails. Use `DoConnection::batch`, which runs statements atomically
-  inside `Storage::transaction`.
+  `begin()` fails. Use `DoConnection::execute_batch`, which runs statements
+  atomically inside `Storage::transaction` -- or `DoConnection::fetch_batch`,
+  which streams each statement's rows and result as well, the shape of sqlc's
+  `:batch*` queries.
 - **No `sqlx::Pool`.** Nothing to pool: the connection is a handle to storage
   the object owns. Keep one in the object's struct.
 - **Integers are limited to ±(2^53 − 1).** Values cross as JavaScript

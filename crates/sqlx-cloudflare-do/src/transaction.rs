@@ -8,7 +8,8 @@ use crate::error::unsupported;
 use crate::{Do, DoConnection};
 
 const NO_TRANSACTIONS: &str = "Durable Object storage has no interactive transactions; \
-     send the statements together with `DoConnection::batch`, which runs them atomically";
+     send the statements together with `DoConnection::execute_batch`, \
+     which runs them atomically";
 
 /// Refuses every transaction.
 ///
@@ -18,7 +19,7 @@ const NO_TRANSACTIONS: &str = "Durable Object storage has no interactive transac
 /// Buffering writes until `commit` would look like a transaction and not be
 /// one -- reads inside it would see the database as it was before -- which is
 /// worse than an error. So `conn.begin()` compiles and fails at runtime, and
-/// the atomic multi-statement case goes through `DoConnection::batch`.
+/// the atomic multi-statement case goes through `DoConnection::execute_batch`.
 #[derive(Debug)]
 pub struct DoTransactionManager;
 
