@@ -122,10 +122,12 @@ impl Connection for DoConnection {
 /// [`connect`](ConnectOptions::connect) always fails: a connection comes from
 /// a Durable Object's storage, which only the object itself holds. Use
 /// [`DoConnection::new`].
+///
+/// Non-exhaustive, so parsing is the only way to get one -- as sqlx itself
+/// does -- and a field can be added without breaking anyone.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DoConnectOptions {
-    _private: (),
-}
+#[non_exhaustive]
+pub struct DoConnectOptions;
 
 impl FromStr for DoConnectOptions {
     type Err = Error;
@@ -141,7 +143,7 @@ impl ConnectOptions for DoConnectOptions {
 
     fn from_url(url: &Url) -> Result<Self, Error> {
         if url.scheme() == "do" {
-            Ok(Self { _private: () })
+            Ok(Self)
         } else {
             Err(Error::Configuration(
                 format!("expected a `do://` URL, got scheme `{}`", url.scheme()).into(),
