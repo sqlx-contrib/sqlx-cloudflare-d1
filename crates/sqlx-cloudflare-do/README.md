@@ -8,7 +8,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://github.com/sqlx-contrib/sqlx-cloudflare/blob/main/LICENSE)
 
 > [!NOTE]
-> **Pre-release.** Not on crates.io yet, and the API may still move.
+> **Pre-1.0.** The API may still change between minor versions.
 
 ```rust
 use sqlx_cloudflare_do::{Do, DoConnection};
