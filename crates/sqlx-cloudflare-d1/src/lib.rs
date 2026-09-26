@@ -32,7 +32,7 @@
 //! Each of these fails loudly rather than pretending:
 //!
 //! - **Transactions.** `begin()` returns an error; D1 cannot hold a
-//!   transaction open across calls. [`D1Connection::batch`] runs several
+//!   transaction open across calls. [`D1Connection::execute_batch`] runs several
 //!   statements atomically in one round trip instead.
 //! - **Integers beyond ±(2^53 − 1).** D1 passes values as JavaScript numbers,
 //!   so binding a wider `i64` is an encode error rather than a rounded value.
@@ -78,6 +78,10 @@ pub use sqlx_cloudflare_core::{
     DatabaseError as D1DatabaseError, QueryResult as D1QueryResult, TypeInfo as D1TypeInfo,
     Value as D1ArgumentValue,
 };
+
+/// What one statement of a [`D1Connection::fetch_batch`] did, and the rows it
+/// returned.
+pub type D1BatchResult = sqlx_cloudflare_core::BatchResult<D1Row>;
 
 /// An executor for D1: `&D1Connection` or `&mut D1Connection`.
 pub trait D1Executor<'c>: sqlx_core::executor::Executor<'c, Database = D1> {}

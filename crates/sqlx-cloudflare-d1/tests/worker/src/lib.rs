@@ -11,8 +11,9 @@ use std::future::Future;
 use std::pin::Pin;
 
 use futures_util::future::try_join;
+use futures_util::{StreamExt, TryStreamExt};
 use sqlx::error::ErrorKind;
-use sqlx::{Connection, Row};
+use sqlx::{Connection, FromRow, Row};
 use sqlx_cloudflare_d1::{D1Connection, D1};
 use worker::{event, Context, Env, Request, Response};
 
@@ -52,6 +53,11 @@ scenarios![
     concurrent_queries_share_a_connection,
     query_builder_bulk_insert,
     derived_types,
+    fetch_batch_returns_rows_and_results,
+    fetch_batch_serves_sqlc_batch_kinds,
+    fetch_batch_is_atomic,
+    fetch_batch_of_nothing_is_empty,
+    fetch_batch_collapses_duplicate_column_names,
 ];
 
 #[event(fetch)]
@@ -216,18 +222,22 @@ async fn integer_bounds(conn: &mut D1Connection) -> Outcome {
         .fetch_one(conn)
         .await
         .map_err(fail)?;
-    ensure(row.try_get::<i64, _>("big").is_err(), "2^53 + 1 decoded as i64")
+    ensure(
+        row.try_get::<i64, _>("big").is_err(),
+        "2^53 + 1 decoded as i64",
+    )
 }
 
 async fn duplicate_column_names(conn: &mut D1Connection) -> Outcome {
     let conn = &*conn;
     reset(conn).await?;
     let user = insert_user(conn, "dup@example.com").await?;
-    let post: i64 = sqlx::query_scalar("INSERT INTO posts (user_id, title) VALUES (?, 't') RETURNING id")
-        .bind(user)
-        .fetch_one(conn)
-        .await
-        .map_err(fail)?;
+    let post: i64 =
+        sqlx::query_scalar("INSERT INTO posts (user_id, title) VALUES (?, 't') RETURNING id")
+            .bind(user)
+            .fetch_one(conn)
+            .await
+            .map_err(fail)?;
 
     let row = sqlx::query("SELECT u.id, p.id FROM users u JOIN posts p ON p.user_id = u.id")
         .fetch_one(conn)
@@ -290,7 +300,10 @@ async fn execute_reports_changes(conn: &mut D1Connection) -> Outcome {
     ensure(inserted.rows_affected() == 1, "insert rows_affected")?;
     ensure(
         inserted.last_insert_rowid() == Some(id),
-        format!("last_insert_rowid {:?}, id {id}", inserted.last_insert_rowid()),
+        format!(
+            "last_insert_rowid {:?}, id {id}",
+            inserted.last_insert_rowid()
+        ),
     )?;
 
     insert_user(conn, "meta2@example.com").await?;
@@ -310,18 +323,21 @@ async fn constraint_errors(conn: &mut D1Connection) -> Outcome {
     insert_user(conn, "taken@example.com").await?;
 
     let cases: [(&str, fn(&ErrorKind) -> bool); 4] = [
-        ("INSERT INTO users (email) VALUES ('taken@example.com')", |k| {
-            matches!(k, ErrorKind::UniqueViolation)
-        }),
+        (
+            "INSERT INTO users (email) VALUES ('taken@example.com')",
+            |k| matches!(k, ErrorKind::UniqueViolation),
+        ),
         ("INSERT INTO users (email) VALUES (NULL)", |k| {
             matches!(k, ErrorKind::NotNullViolation)
         }),
-        ("INSERT INTO users (email, age) VALUES ('neg@example.com', -1)", |k| {
-            matches!(k, ErrorKind::CheckViolation)
-        }),
-        ("INSERT INTO posts (user_id, title) VALUES (999999, 't')", |k| {
-            matches!(k, ErrorKind::ForeignKeyViolation)
-        }),
+        (
+            "INSERT INTO users (email, age) VALUES ('neg@example.com', -1)",
+            |k| matches!(k, ErrorKind::CheckViolation),
+        ),
+        (
+            "INSERT INTO posts (user_id, title) VALUES (999999, 't')",
+            |k| matches!(k, ErrorKind::ForeignKeyViolation),
+        ),
     ];
 
     for (sql, expected) in cases {
@@ -346,7 +362,7 @@ async fn batch_reports_each_statement(conn: &mut D1Connection) -> Outcome {
     reset(conn).await?;
 
     let results = conn
-        .batch([
+        .execute_batch([
             sqlx::query("INSERT INTO users (email) VALUES (?)").bind("b1@example.com"),
             sqlx::query("INSERT INTO users (email) VALUES (?)").bind("b2@example.com"),
             sqlx::query("UPDATE users SET name = 'x'"),
@@ -364,7 +380,7 @@ async fn batch_is_atomic(conn: &mut D1Connection) -> Outcome {
     insert_user(conn, "taken@example.com").await?;
 
     let result = conn
-        .batch([
+        .execute_batch([
             sqlx::query("INSERT INTO users (email) VALUES ('fresh@example.com')"),
             sqlx::query("INSERT INTO users (email) VALUES ('taken@example.com')"),
         ])
@@ -375,7 +391,10 @@ async fn batch_is_atomic(conn: &mut D1Connection) -> Outcome {
         .fetch_one(conn)
         .await
         .map_err(fail)?;
-    ensure(count == 1, format!("{count} users: the first insert survived"))
+    ensure(
+        count == 1,
+        format!("{count} users: the first insert survived"),
+    )
 }
 
 async fn begin_fails(conn: &mut D1Connection) -> Outcome {
@@ -396,10 +415,12 @@ struct User {
 async fn from_row(conn: &mut D1Connection) -> Outcome {
     let conn = &*conn;
     reset(conn).await?;
-    sqlx::query("INSERT INTO users (email, name, age, score) VALUES ('row@example.com', 'Row', 30, 2.5)")
-        .execute(conn)
-        .await
-        .map_err(fail)?;
+    sqlx::query(
+        "INSERT INTO users (email, name, age, score) VALUES ('row@example.com', 'Row', 30, 2.5)",
+    )
+    .execute(conn)
+    .await
+    .map_err(fail)?;
 
     let user = sqlx::query_as::<D1, User>("SELECT * FROM users")
         .fetch_one(conn)
@@ -437,7 +458,10 @@ async fn invalid_sql_is_an_error(conn: &mut D1Connection) -> Outcome {
 async fn wrong_argument_count_is_an_error(conn: &mut D1Connection) -> Outcome {
     let conn = &*conn;
 
-    let too_few = sqlx::query("SELECT ?1, ?2").bind(1_i64).fetch_all(conn).await;
+    let too_few = sqlx::query("SELECT ?1, ?2")
+        .bind(1_i64)
+        .fetch_all(conn)
+        .await;
     ensure(
         matches!(too_few, Err(sqlx::Error::Database(_))),
         format!("too few: {too_few:?}"),
@@ -456,7 +480,7 @@ async fn wrong_argument_count_is_an_error(conn: &mut D1Connection) -> Outcome {
 
 async fn empty_batch(conn: &mut D1Connection) -> Outcome {
     let results = conn
-        .batch(std::iter::empty::<sqlx::query::Query<'_, D1, _>>())
+        .execute_batch(std::iter::empty::<sqlx::query::Query<'_, D1, _>>())
         .await
         .map_err(fail)?;
 
@@ -470,7 +494,7 @@ async fn batch_with_unencodable_argument_runs_nothing(conn: &mut D1Connection) -
     reset(conn).await?;
 
     let result = conn
-        .batch([
+        .execute_batch([
             sqlx::query("INSERT INTO users (email) VALUES ('first@example.com')"),
             sqlx::query("INSERT INTO numbers (value) VALUES (?)").bind(1_i64 << 53),
         ])
@@ -513,7 +537,10 @@ async fn blob_edge_cases(conn: &mut D1Connection) -> Outcome {
     reset(conn).await?;
     let large: Vec<u8> = (0..256 * 1024).map(|i| (i % 251) as u8).collect();
 
-    for (email, bytes) in [("empty@example.com", Vec::new()), ("large@example.com", large)] {
+    for (email, bytes) in [
+        ("empty@example.com", Vec::new()),
+        ("large@example.com", large),
+    ] {
         sqlx::query("INSERT INTO users (email, avatar) VALUES (?, ?)")
             .bind(email)
             .bind(&bytes)
@@ -557,7 +584,11 @@ async fn concurrent_queries_share_a_connection(conn: &mut D1Connection) -> Outco
 async fn query_builder_bulk_insert(conn: &mut D1Connection) -> Outcome {
     let conn = &*conn;
     reset(conn).await?;
-    let users = [("qb1@example.com", 10), ("qb2@example.com", 20), ("qb3@example.com", 30)];
+    let users = [
+        ("qb1@example.com", 10),
+        ("qb2@example.com", 20),
+        ("qb3@example.com", 30),
+    ];
 
     let mut builder = sqlx::QueryBuilder::<D1>::new("INSERT INTO users (email, age) ");
     builder.push_values(users, |mut row, (email, age)| {
@@ -610,7 +641,10 @@ async fn derived_types(conn: &mut D1Connection) -> Outcome {
         .map_err(fail)?;
 
     ensure(member.id == UserId(5), format!("id {:?}", member.id))?;
-    ensure(member.role == Role::Writer, format!("role {:?}", member.role))?;
+    ensure(
+        member.role == Role::Writer,
+        format!("role {:?}", member.role),
+    )?;
 
     let reader: Role = sqlx::query_scalar("SELECT 1")
         .fetch_one(conn)
@@ -618,6 +652,174 @@ async fn derived_types(conn: &mut D1Connection) -> Outcome {
         .map_err(fail)?;
     ensure(reader == Role::Reader, format!("1 decoded as {reader:?}"))?;
 
-    let unknown = sqlx::query_scalar::<D1, Role>("SELECT 3").fetch_one(conn).await;
+    let unknown = sqlx::query_scalar::<D1, Role>("SELECT 3")
+        .fetch_one(conn)
+        .await;
     ensure(unknown.is_err(), format!("3 decoded: {unknown:?}"))
+}
+
+// One statement per kind of result: rows from `RETURNING`, rows from a
+// `SELECT`, and a write that returns none -- each item carrying both.
+async fn fetch_batch_returns_rows_and_results(conn: &mut D1Connection) -> Outcome {
+    let conn = &*conn;
+    reset(conn).await?;
+
+    let results: Vec<_> = conn
+        .fetch_batch([
+            sqlx::query("INSERT INTO users (email) VALUES ('bf1@example.com') RETURNING id"),
+            sqlx::query("INSERT INTO users (email) VALUES ('bf2@example.com') RETURNING id"),
+            sqlx::query("SELECT id, email FROM users ORDER BY id"),
+            sqlx::query("UPDATE users SET name = 'x'"),
+        ])
+        .try_collect()
+        .await
+        .map_err(fail)?;
+
+    let counts: Vec<usize> = results.iter().map(|r| r.rows().len()).collect();
+    ensure(
+        counts == [1, 1, 2, 0],
+        format!("rows per statement {counts:?}"),
+    )?;
+    let changes: Vec<u64> = results.iter().map(|r| r.result().rows_affected()).collect();
+    ensure(
+        changes == [1, 1, 0, 2],
+        format!("rows_affected {changes:?}"),
+    )?;
+
+    let first: i64 = results[0].rows()[0].get("id");
+    let second: i64 = results[1].rows()[0].get("id");
+    let selected: Vec<(i64, String)> = results[2]
+        .rows()
+        .iter()
+        .map(|row| (row.get("id"), row.get("email")))
+        .collect();
+    ensure(
+        selected
+            == [
+                (first, "bf1@example.com".into()),
+                (second, "bf2@example.com".into()),
+            ],
+        format!("selected {selected:?}"),
+    )
+}
+
+// What sqlc-gen-sqlx's `:batchexec`, `:batchone` and `:batchmany` would make
+// of the stream: one item per input, mapped through `FromRow`.
+async fn fetch_batch_serves_sqlc_batch_kinds(conn: &mut D1Connection) -> Outcome {
+    let conn = &*conn;
+    reset(conn).await?;
+    let alice = insert_user(conn, "alice@example.com").await?;
+    let bob = insert_user(conn, "bob@example.com").await?;
+    for (user, title) in [(alice, "a1"), (alice, "a2"), (bob, "b1")] {
+        sqlx::query("INSERT INTO posts (user_id, title) VALUES (?, ?)")
+            .bind(user)
+            .bind(title)
+            .execute(conn)
+            .await
+            .map_err(fail)?;
+    }
+
+    // :batchone
+    let users: Vec<User> = conn
+        .fetch_batch(
+            [alice, bob].map(|id| sqlx::query("SELECT * FROM users WHERE id = ?").bind(id)),
+        )
+        .and_then(|result| async move {
+            let row = result.rows().first().ok_or(sqlx::Error::RowNotFound)?;
+            User::from_row(row)
+        })
+        .try_collect()
+        .await
+        .map_err(fail)?;
+    let emails: Vec<&str> = users.iter().map(|user| user.email.as_str()).collect();
+    ensure(
+        emails == ["alice@example.com", "bob@example.com"],
+        format!("{emails:?}"),
+    )?;
+
+    // :batchmany
+    let titles: Vec<Vec<String>> = conn
+        .fetch_batch([alice, bob].map(|id| {
+            sqlx::query("SELECT title FROM posts WHERE user_id = ? ORDER BY title").bind(id)
+        }))
+        .map_ok(|result| result.rows().iter().map(|row| row.get("title")).collect())
+        .try_collect()
+        .await
+        .map_err(fail)?;
+    ensure(
+        titles == [vec!["a1", "a2"], vec!["b1"]],
+        format!("{titles:?}"),
+    )?;
+
+    // :batchexec
+    let done: Vec<()> = conn
+        .fetch_batch(
+            [alice, bob].map(|id| sqlx::query("DELETE FROM posts WHERE user_id = ?").bind(id)),
+        )
+        .map_ok(|_| ())
+        .try_collect()
+        .await
+        .map_err(fail)?;
+    ensure(done.len() == 2, format!("{} items", done.len()))?;
+
+    let left: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM posts")
+        .fetch_one(conn)
+        .await
+        .map_err(fail)?;
+    ensure(left == 0, format!("{left} posts left"))
+}
+
+// A failure is the stream's one item, and nothing before it took effect.
+async fn fetch_batch_is_atomic(conn: &mut D1Connection) -> Outcome {
+    let conn = &*conn;
+    reset(conn).await?;
+    insert_user(conn, "taken@example.com").await?;
+
+    let items: Vec<Result<_, sqlx::Error>> = conn
+        .fetch_batch([
+            sqlx::query("INSERT INTO users (email) VALUES ('fresh@example.com') RETURNING id"),
+            sqlx::query("INSERT INTO users (email) VALUES ('taken@example.com')"),
+        ])
+        .collect()
+        .await;
+    ensure(items.len() == 1, format!("{} items", items.len()))?;
+    match &items[0] {
+        Err(sqlx::Error::Database(error)) if matches!(error.kind(), ErrorKind::UniqueViolation) => {
+        }
+        other => return Err(format!("{other:?}")),
+    }
+
+    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM users")
+        .fetch_one(conn)
+        .await
+        .map_err(fail)?;
+    ensure(
+        count == 1,
+        format!("{count} users: the first insert survived"),
+    )
+}
+
+async fn fetch_batch_of_nothing_is_empty(conn: &mut D1Connection) -> Outcome {
+    let items: Vec<_> = conn
+        .fetch_batch(std::iter::empty::<sqlx::query::Query<'_, D1, _>>())
+        .try_collect()
+        .await
+        .map_err(fail)?;
+    ensure(items.is_empty(), format!("{} items", items.len()))
+}
+
+// Pinned rather than hidden: D1's `batch()` returns rows as objects, so two
+// columns with one name collapse to the last -- unlike the executor, which
+// reads arrays (see `duplicate_column_names`). If D1 ever returns arrays
+// here, this fails and the documented limitation can go.
+async fn fetch_batch_collapses_duplicate_column_names(conn: &mut D1Connection) -> Outcome {
+    let results: Vec<_> = conn
+        .fetch_batch([sqlx::query("SELECT 1 AS a, 2 AS a")])
+        .try_collect()
+        .await
+        .map_err(fail)?;
+
+    let row = &results[0].rows()[0];
+    ensure(row.len() == 1, format!("{} columns", row.len()))?;
+    ensure(row.get::<i64, _>("a") == 2, "the last `a` did not win")
 }

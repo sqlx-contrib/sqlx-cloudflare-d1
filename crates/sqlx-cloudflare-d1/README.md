@@ -52,8 +52,12 @@ The crate runs on `wasm32-unknown-unknown`, inside a Worker.
 - **No `query!` / `query_as!` macros.** sqlx's macros only know its built-in
   drivers. The runtime API (`sqlx::query`, `query_as`, `FromRow`) works.
 - **No transactions.** D1 cannot hold one open across calls, so `begin()`
-  fails. Use `D1Connection::batch`, which runs statements atomically in one
-  round trip.
+  fails. Use `D1Connection::execute_batch`, which runs statements atomically
+  in one round trip.
+- **Rows in a batch are keyed by name.** `D1Connection::fetch_batch` streams
+  each statement's rows and result -- the shape of sqlc's `:batch*` queries.
+  D1's `batch()` returns rows as objects, so two columns with one name
+  collapse to the last. Alias them apart inside a batch.
 - **No `sqlx::Pool`.** Nothing to pool: build a connection per request from
   the binding.
 - **Integers are limited to ±(2^53 − 1).** D1 passes values as JavaScript

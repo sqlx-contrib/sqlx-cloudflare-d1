@@ -8,7 +8,8 @@ use crate::error::unsupported;
 use crate::{D1Connection, D1};
 
 const NO_TRANSACTIONS: &str = "D1 has no interactive transactions; \
-     send the statements together with `D1Connection::batch`, which D1 runs atomically";
+     send the statements together with `D1Connection::execute_batch`, \
+     which D1 runs atomically";
 
 /// Refuses every transaction.
 ///
@@ -17,7 +18,7 @@ const NO_TRANSACTIONS: &str = "D1 has no interactive transactions; \
 /// `commit` would look like a transaction and not be one -- reads inside it
 /// would see the database as it was before -- which is worse than an error.
 /// So `conn.begin()` compiles and fails at runtime, and the atomic
-/// multi-statement case goes through `D1Connection::batch`.
+/// multi-statement case goes through `D1Connection::execute_batch`.
 #[derive(Debug)]
 pub struct D1TransactionManager;
 

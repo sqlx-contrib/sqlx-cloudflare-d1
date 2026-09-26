@@ -15,7 +15,7 @@
 use js_sys::futures::JsFuture;
 use js_sys::{Array, Object, Promise, Reflect};
 use sqlx_cloudflare_core::js::{database_error, from_js, to_js_array};
-use sqlx_cloudflare_core::QueryResult;
+use sqlx_cloudflare_core::{BatchResult, QueryResult};
 use sqlx_core::error::Error;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
@@ -24,7 +24,7 @@ use worker::worker_sys::types::{
     D1Result as D1ResultSys,
 };
 
-use crate::{D1ArgumentValue, D1QueryResult, D1Row};
+use crate::{D1ArgumentValue, D1BatchResult, D1QueryResult, D1Row};
 
 #[wasm_bindgen]
 extern "C" {
@@ -123,11 +123,12 @@ pub(crate) async fn run(statement: &D1PreparedStatementSys) -> Result<D1QueryRes
 }
 
 /// Runs `statements` as one D1 batch: in order, in one round trip, and as a
-/// single transaction -- if one fails, none of them take effect.
+/// single transaction -- if one fails, none of them take effect. Returns what
+/// each statement did and the rows it returned.
 pub(crate) async fn batch(
     db: &worker::D1Database,
     statements: Vec<D1PreparedStatementSys>,
-) -> Result<Vec<D1QueryResult>, Error> {
+) -> Result<Vec<D1BatchResult>, Error> {
     let db: &D1DatabaseSys = AsRef::<JsValue>::as_ref(db).unchecked_ref();
     let statements = statements.into_iter().collect::<Array>();
 
@@ -142,8 +143,50 @@ pub(crate) async fn batch(
 
     results
         .iter()
-        .map(|result| query_result(result.unchecked_ref()))
+        .map(|result| {
+            let result: &D1ResultSys = result.unchecked_ref();
+            Ok(BatchResult::new(rows(result)?, query_result(result)?))
+        })
         .collect()
+}
+
+/// A batch statement's rows, which D1 returns as objects keyed by column
+/// name -- `batch()` has no `raw({ columnNames: true })` to ask for arrays.
+///
+/// So the column names are the first row's keys, in the order JavaScript
+/// keeps them, and every row is read by those names. Two columns with one
+/// name are one key, and only the last survives; a key that looks like an
+/// integer sorts ahead of the rest. Neither happens with arrays, which is why
+/// only a batch reads rows this way.
+fn rows(result: &D1ResultSys) -> Result<Vec<D1Row>, Error> {
+    let Some(objects) = result.results().map_err(|error| protocol_error(&error))? else {
+        return Ok(Vec::new());
+    };
+    let Some(first) = objects.iter().next() else {
+        return Ok(Vec::new());
+    };
+
+    let names = Object::keys(first.unchecked_ref::<Object>())
+        .iter()
+        .map(|name| {
+            name.as_string().ok_or_else(|| {
+                Error::Protocol("D1 returned a column name that is not a string".into())
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+
+    let mut rows = Vec::with_capacity(objects.length() as usize);
+    for object in objects.iter() {
+        let mut values = Vec::with_capacity(names.len());
+        for name in &names {
+            let value = Reflect::get(&object, &JsValue::from_str(name))
+                .map_err(|error| protocol_error(&error))?;
+            values.push(from_js(&value)?);
+        }
+        rows.push(values);
+    }
+
+    D1Row::from_result(names, rows)
 }
 
 fn query_result(result: &D1ResultSys) -> Result<D1QueryResult, Error> {

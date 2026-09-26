@@ -98,7 +98,8 @@ fn futures_are_send(conn: &mut D1Connection) {
     assert_send(count(conn));
     assert_send(members(conn, Role::Writer));
     assert_send(insert_members(conn, &[UserId(1)]));
-    assert_send(conn.batch([sqlx::query("DELETE FROM users")]));
+    assert_send(conn.execute_batch([sqlx::query("DELETE FROM users")]));
+    assert_send(conn.fetch_batch([sqlx::query("SELECT * FROM users")]));
 }
 
 #[test]
