@@ -7,7 +7,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 > [!NOTE]
-> **Pre-release.** Not on crates.io yet, and the API may still move.
+> **Pre-1.0.** The API may still change between minor versions.
 
 | Crate | What it drives |
 |---|---|
