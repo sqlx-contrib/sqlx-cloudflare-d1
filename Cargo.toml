@@ -1,10 +1,13 @@
 [workspace]
 resolver = "2"
 members = ["crates/*"]
-# The test Worker is its own package, not a member: it only builds for
-# wasm32-unknown-unknown, through `worker-build`, and keeps its own lock.
-# Without this, cargo finds this manifest above it and refuses to build it.
-exclude = ["crates/sqlx-cloudflare-d1/tests/worker"]
+# The test Workers are their own packages, not members: they only build for
+# wasm32-unknown-unknown, through `worker-build`, and keep their own locks.
+# Without this, cargo finds this manifest above them and refuses to build them.
+exclude = [
+    "crates/sqlx-cloudflare-d1/tests/worker",
+    "crates/sqlx-cloudflare-do/tests/worker",
+]
 
 [workspace.package]
 # No `version` here on purpose: each crate carries a literal one instead of

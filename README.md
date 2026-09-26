@@ -12,8 +12,13 @@
 | Crate | What it drives |
 |---|---|
 | [`sqlx-cloudflare-d1`](crates/sqlx-cloudflare-d1) | Cloudflare D1, over the Workers D1 binding |
+| [`sqlx-cloudflare-do`](crates/sqlx-cloudflare-do) | A Durable Object's SQL storage |
 
-Each crate is independent: depend on the one for the storage you use.
+Each driver is independent: depend on the one for the storage you use. Both
+are SQLite behind a JavaScript API, so they share their value model, type
+mapping and error parsing through
+[`sqlx-cloudflare-core`](crates/sqlx-cloudflare-core), which you do not
+depend on directly.
 
 ## Development
 

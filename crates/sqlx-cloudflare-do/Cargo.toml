@@ -1,0 +1,47 @@
+[package]
+name = "sqlx-cloudflare-do"
+description = "A Cloudflare Durable Objects driver for sqlx: an sqlx::Database over a Durable Object's SQL storage"
+version = "0.1.0" # literal, not inherited -- see [workspace.package]
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+readme = "README.md"
+keywords = ["sqlx", "cloudflare", "durable-objects", "workers", "sqlite"]
+categories = ["database", "wasm"]
+# The test Worker is not part of the library.
+exclude = ["tests/worker"]
+
+[lints]
+workspace = true
+
+[features]
+default = []
+
+[dependencies]
+# `version` alongside `path` because `cargo publish` refuses a path dependency
+# without one -- the published crate has no sibling directory to resolve, only
+# a registry. release-please's cargo-workspace plugin keeps it in step.
+sqlx-cloudflare-core = { path = "../sqlx-cloudflare-core", version = "0.1.0" }
+sqlx-core = { workspace = true }
+# SQL storage is not behind a `worker` feature: `Storage::sql` is always there.
+worker = { workspace = true }
+wasm-bindgen = { workspace = true }
+js-sys = { workspace = true }
+futures-core = { workspace = true }
+futures-util = { workspace = true, features = ["alloc"] }
+# Only for `log::LevelFilter`, which `ConnectOptions` names in its signatures.
+log = { workspace = true }
+
+[dev-dependencies]
+# The facade, only to prove that a consumer naming `sqlx::Database` and using
+# `#[derive(sqlx::FromRow)]` sees this crate's `Do` -- see `tests/facade.rs`.
+# `macros` is sqlx's default, and the one that turns on `sqlx-core/offline`.
+sqlx = { workspace = true, features = ["derive", "macros"] }
+# `tests/driver.rs` drives the test Worker over plain HTTP on localhost, so no TLS.
+ureq = { workspace = true }
+serde_json = { workspace = true }
+
+[package.metadata.docs.rs]
+all-features = true
+targets = ["wasm32-unknown-unknown"]
