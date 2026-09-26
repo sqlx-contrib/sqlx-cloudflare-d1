@@ -10,7 +10,8 @@
 //!   [`impl_types!`];
 //! - the conversion to and from JavaScript values ([`js`]);
 //! - [`DatabaseError`], read from SQLite's message text;
-//! - [`QueryResult`] and the typing of a result's columns ([`rows`]).
+//! - [`QueryResult`], [`BatchResult`] and the typing of a result's columns
+//!   ([`rows`]).
 //!
 //! What a driver keeps for itself is the part the orphan rule will not let it
 //! share: its `Database` type and the row, column, value and arguments types
@@ -28,7 +29,7 @@ mod value;
 
 pub use arguments::add_argument;
 pub use error::DatabaseError;
-pub use result::QueryResult;
+pub use result::{BatchResult, QueryResult};
 pub use row::rows;
 pub use value::{safe_integer, AsValue, TypeInfo, Value, MAX_SAFE_INTEGER};
 
