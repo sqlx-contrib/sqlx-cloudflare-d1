@@ -1,5 +1,7 @@
+use std::cell::RefCell;
 use std::fmt::{self, Debug, Formatter};
 use std::future::{self, Future};
+use std::rc::Rc;
 use std::str::FromStr;
 use std::time::Duration;
 
@@ -9,6 +11,7 @@ use sqlx_core::error::Error;
 use sqlx_core::transaction::Transaction;
 use sqlx_core::Url;
 
+use crate::transaction::Open;
 use crate::Do;
 
 /// A connection to a Durable Object's SQL storage.
@@ -21,19 +24,23 @@ use crate::Do;
 /// connection kept in the object's struct serves every request through
 /// `&self`.
 pub struct DoConnection {
-    /// For [`execute_batch`](Self::execute_batch) and
-    /// [`fetch_batch`](Self::fetch_batch), which run through
-    /// `Storage::transaction`.
-    pub(crate) storage: worker::Storage,
+    /// For everything that runs through `Storage::transaction`. Shared,
+    /// because the transaction `begin()` opens is parked in a task of its own
+    /// that needs the storage too -- and `worker::Storage` cannot be cloned.
+    pub(crate) storage: Rc<worker::Storage>,
     /// `storage.sql()`, kept rather than fetched for every query.
     pub(crate) sql: worker::SqlStorage,
+    /// Where a transaction `begin()` opened stands; see
+    /// [`DoTransactionManager`](crate::DoTransactionManager).
+    pub(crate) open: RefCell<Open>,
 }
 
 // `worker::Storage` is neither, only because it holds a JavaScript handle --
-// and `worker` itself makes `SqlStorage` both on the grounds that follow. A
-// Durable Object runs on one thread, so the handle never meets another one.
-// The executor's futures rely on this: they hold `&DoConnection`, and sqlx
-// requires them to be `Send`.
+// and `worker` itself makes `SqlStorage` both on the grounds that follow --
+// and `Rc` and `RefCell` are neither for the same reason: they assume one
+// thread. A Durable Object runs on one thread, so none of them ever meets
+// another one. The executor's futures rely on this: they hold
+// `&DoConnection`, and sqlx requires them to be `Send`.
 //
 // SAFETY: a Durable Object is single-threaded; see above.
 unsafe impl Send for DoConnection {}
@@ -45,7 +52,11 @@ impl DoConnection {
     #[must_use]
     pub fn new(storage: worker::Storage) -> Self {
         let sql = storage.sql();
-        Self { storage, sql }
+        Self {
+            storage: Rc::new(storage),
+            sql,
+            open: RefCell::default(),
+        }
     }
 
     /// The storage this connection wraps, for anything this crate does not
@@ -63,8 +74,12 @@ impl DoConnection {
 
     /// The storage this connection wraps, giving up the connection. See
     /// [`storage`](Self::storage) to borrow it instead.
+    ///
+    /// Shared, because a transaction `begin()` opened holds the storage too
+    /// until it has ended -- which, for one dropped without a commit, can be
+    /// a moment after the drop.
     #[must_use]
-    pub fn into_storage(self) -> worker::Storage {
+    pub fn into_storage(self) -> Rc<worker::Storage> {
         self.storage
     }
 }
@@ -100,7 +115,8 @@ impl Connection for DoConnection {
         future::ready(Ok(()))
     }
 
-    /// Always fails -- see [`DoTransactionManager`](crate::DoTransactionManager).
+    /// Parks a transaction open -- see
+    /// [`DoTransactionManager`](crate::DoTransactionManager).
     fn begin(&mut self) -> impl Future<Output = Result<Transaction<'_, Do>, Error>> + Send + '_ {
         Transaction::begin(self, None)
     }

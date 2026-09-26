@@ -86,9 +86,24 @@ two share one definition.
 
 ## Transactions
 
-`sql.exec` rejects `BEGIN`, so a transaction is a callback. It commits when
-the callback returns `Ok` and rolls back every write when it returns `Err`,
-and inside it you read your own writes:
+Real transactions -- they read their own writes and roll back cleanly --
+two ways. sqlx's own `begin()` works as with any driver:
+
+```rust
+use sqlx::Connection;
+
+let mut tx = conn.begin().await?;
+sqlx::query("UPDATE accounts SET balance = balance - 10 WHERE id = 1")
+    .execute(&mut *tx)
+    .await?;
+sqlx::query("UPDATE accounts SET balance = balance + 10 WHERE id = 2")
+    .execute(&mut *tx)
+    .await?;
+tx.commit().await?; // dropping `tx` instead rolls both back
+```
+
+Or as a callback, which commits on `Ok`, rolls back on `Err`, and cannot be
+left open by mistake:
 
 ```rust
 let id = conn
@@ -106,12 +121,16 @@ let id = conn
     .await?;
 ```
 
+- **A transaction holds the whole object.** No other request reaches the
+  object until it ends, even while your code awaits something that is not
+  storage. That keeps other requests' writes out of it -- and is why it
+  should be short: no slow `fetch()` inside, and never a request to the object
+  itself. A `begin()` transaction left open stalls the object until it is
+  committed, rolled back or dropped.
 - **The callback owns what it uses.** It is `'static` -- move data in, and run
   queries through the `tx` it is handed, not the connection.
-- **It holds the whole object.** No other request reaches the object until
-  the transaction ends, even while the callback awaits something that is not
-  storage. That keeps other requests' writes out of it -- and is why it should
-  be short: no `fetch()` inside, and never a request to the object itself.
+- **No nesting.** `begin()` inside an open transaction -- a savepoint, to sqlx
+  -- fails, and so do batches and `transaction` while one is open.
 
 ## Batches
 
@@ -136,8 +155,8 @@ let names: Vec<String> = conn
 
 - **No `query!` / `query_as!` macros.** sqlx's macros only know its built-in
   drivers. The runtime API (`sqlx::query`, `query_as`, `FromRow`) works.
-- **No `begin()`.** `sql.exec` rejects `BEGIN` and `SAVEPOINT`, so sqlx's
-  `begin()` fails. Use a [transaction callback](#transactions).
+- **No savepoints.** `sql.exec` rejects `SAVEPOINT`, so a nested `begin()`
+  fails. See [Transactions](#transactions).
 - **No `sqlx::Pool`.** Nothing to pool: the connection is a handle to storage
   the object owns. Keep one in the object's struct.
 - **Integers are limited to ±(2^53 − 1).** Values cross as JavaScript

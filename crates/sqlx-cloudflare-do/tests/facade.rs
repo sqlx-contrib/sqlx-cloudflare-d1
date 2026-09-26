@@ -89,6 +89,15 @@ async fn insert_members(conn: &DoConnection, ids: &[UserId]) -> Result<u64, sqlx
     Ok(builder.build().execute(conn).await?.rows_affected())
 }
 
+// sqlx's own transactions: `begin()`, statements through `&mut *tx`, commit.
+async fn begin_and_commit(conn: &mut DoConnection) -> Result<(), sqlx::Error> {
+    use sqlx::Connection;
+
+    let mut tx = conn.begin().await?;
+    sqlx::query("DELETE FROM users").execute(&mut *tx).await?;
+    tx.commit().await
+}
+
 // Handlers need `Send` futures (axum, for one), even inside a Worker.
 fn assert_send<T: Send>(_: T) {}
 
@@ -100,6 +109,7 @@ fn futures_are_send(conn: &mut DoConnection) {
     assert_send(insert_members(conn, &[UserId(1)]));
     assert_send(conn.execute_batch([sqlx::query("DELETE FROM users")]));
     assert_send(conn.fetch_batch([sqlx::query("SELECT * FROM users")]));
+    assert_send(begin_and_commit(conn));
     assert_send(conn.transaction(|tx| async move {
         sqlx::query("DELETE FROM users").execute(&tx).await?;
         Ok::<_, sqlx::Error>(())

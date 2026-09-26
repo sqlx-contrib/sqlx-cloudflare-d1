@@ -43,7 +43,6 @@ scenarios![
     constraint_errors,
     batch_reports_each_statement,
     batch_is_atomic,
-    begin_fails,
     from_row,
     invalid_sql_is_an_error,
     wrong_argument_count_is_an_error,
@@ -63,6 +62,12 @@ scenarios![
     transaction_rolls_back_when_the_callback_fails,
     transaction_keeps_the_statement_error,
     transaction_reads_its_own_writes,
+    begin_commit_keeps_writes,
+    begin_rollback_undoes_writes,
+    dropped_transaction_rolls_back_before_the_next_query,
+    begin_reads_its_own_writes_across_awaits,
+    nested_begin_is_refused,
+    batches_and_callbacks_are_refused_while_open,
     select_reports_no_changes,
     begin_statement_is_refused,
 ];
@@ -73,7 +78,10 @@ const SCHEMA: &str = include_str!("../schema.sql");
 // share one database, and `reset` clears what each one depends on.
 // Scenarios the Worker runs itself rather than the object: they need more
 // than one request to the object at a time.
-const WORKER_SCENARIOS: &[&str] = &["transaction_holds_off_other_requests"];
+const WORKER_SCENARIOS: &[&str] = &[
+    "transaction_holds_off_other_requests",
+    "begin_holds_off_other_requests",
+];
 
 #[event(fetch)]
 async fn fetch(req: Request, env: Env, _ctx: Context) -> worker::Result<Response> {
@@ -88,8 +96,14 @@ async fn fetch(req: Request, env: Env, _ctx: Context) -> worker::Result<Response
             names.extend(WORKER_SCENARIOS.iter().map(|name| (*name).to_owned()));
             Response::from_json(&names)
         }
-        "/transaction_holds_off_other_requests" => {
-            let body = match transaction_holds_off_other_requests(&env).await {
+        path @ ("/transaction_holds_off_other_requests" | "/begin_holds_off_other_requests") => {
+            // The same check for both ways to hold a transaction open.
+            let hold = if path.starts_with("/begin") {
+                "begin-hold"
+            } else {
+                "hold"
+            };
+            let body = match holds_off_other_requests(&env, hold).await {
                 Ok(()) => serde_json::json!({ "ok": true }),
                 Err(error) => serde_json::json!({ "ok": false, "error": error }),
             };
@@ -120,9 +134,9 @@ impl DurableObject for TestObject {
         // The steps of the Worker-level scenarios, which are not scenarios
         // themselves.
         if let Some(op) = name.strip_prefix("op/") {
-            let conn = DoConnection::new(self.state.storage());
+            let mut conn = DoConnection::new(self.state.storage());
             conn.sql().exec(SCHEMA, None)?;
-            return op_step(&conn, op).await;
+            return op_step(&mut conn, op).await;
         }
 
         let Some((_, scenario)) = SCENARIOS.iter().find(|(n, _)| *n == name) else {
@@ -130,7 +144,7 @@ impl DurableObject for TestObject {
         };
 
         // A fresh connection per request, from the object's own storage:
-        // `begin_fails` needs one it can borrow mutably.
+        // `begin()` needs one it can borrow mutably.
         let mut conn = DoConnection::new(self.state.storage());
         conn.sql().exec(SCHEMA, None)?;
 
@@ -456,10 +470,6 @@ async fn batch_is_atomic(conn: &mut DoConnection) -> Outcome {
         count == 1,
         format!("{count} users: the first insert survived"),
     )
-}
-
-async fn begin_fails(conn: &mut DoConnection) -> Outcome {
-    ensure(conn.begin().await.is_err(), "begin succeeded")
 }
 
 #[derive(Debug, sqlx::FromRow)]
@@ -1075,7 +1085,7 @@ async fn transaction_reads_its_own_writes(conn: &mut DoConnection) -> Outcome {
 // The object delivers no other request while a transaction runs, even while
 // its callback awaits a timer -- which is what keeps a concurrent request's
 // writes out of it, and out of its rollback. Measured in #7; pinned here.
-async fn transaction_holds_off_other_requests(env: &Env) -> Outcome {
+async fn holds_off_other_requests(env: &Env, hold: &'static str) -> Outcome {
     let step = |op: &'static str| async move {
         step_on(env, op)
             .await
@@ -1087,7 +1097,7 @@ async fn transaction_holds_off_other_requests(env: &Env) -> Outcome {
         worker::Delay::from(std::time::Duration::from_millis(50)).await;
         step("insert").await
     };
-    let (held, other) = futures_util::future::try_join(step("hold"), other).await?;
+    let (held, other) = futures_util::future::try_join(step(hold), other).await?;
     let after = step("emails").await?;
 
     ensure(held["rolled_back"] == true, format!("hold: {held}"))?;
@@ -1133,7 +1143,7 @@ impl From<sqlx::Error> for HoldError {
     }
 }
 
-async fn op_step(conn: &DoConnection, op: &str) -> worker::Result<Response> {
+async fn op_step(conn: &mut DoConnection, op: &str) -> worker::Result<Response> {
     let now = || worker::Date::now().as_millis();
 
     let body = match op {
@@ -1157,27 +1167,211 @@ async fn op_step(conn: &DoConnection, op: &str) -> worker::Result<Response> {
             serde_json::json!({ "at": at })
         }
         "hold" => {
-            let result = conn
-                .transaction(|tx| async move {
-                    sqlx::query("INSERT INTO users (email) VALUES ('held')")
-                        .execute(&tx)
-                        .await?;
-                    worker::Delay::from(std::time::Duration::from_millis(300)).await;
-                    let seen: Vec<String> =
-                        sqlx::query_scalar("SELECT email FROM users ORDER BY id")
-                            .fetch_all(&tx)
-                            .await?;
-                    Err::<(), _>(HoldError::Held(seen))
-                })
-                .await;
+            // Named in full: with `sqlx::Connection` in scope, `conn.transaction`
+            // on a `&mut DoConnection` is sqlx's own method.
+            let result = DoConnection::transaction(conn, |tx| async move {
+                sqlx::query("INSERT INTO users (email) VALUES ('held')")
+                    .execute(&tx)
+                    .await?;
+                worker::Delay::from(std::time::Duration::from_millis(300)).await;
+                let seen: Vec<String> = sqlx::query_scalar("SELECT email FROM users ORDER BY id")
+                    .fetch_all(&tx)
+                    .await?;
+                Err::<(), _>(HoldError::Held(seen))
+            })
+            .await;
             let seen = match result {
                 Err(HoldError::Held(seen)) => seen,
                 other => return Response::error(format!("{other:?}"), 500),
             };
             serde_json::json!({ "rolled_back": true, "seen_inside": seen, "ended": now() })
         }
+        // The same, held open with sqlx's `begin()` and dropped, not
+        // committed, at the end.
+        "begin-hold" => {
+            let mut tx = conn
+                .begin()
+                .await
+                .map_err(|error| worker::Error::RustError(error.to_string()))?;
+            sqlx::query("INSERT INTO users (email) VALUES ('held')")
+                .execute(&mut *tx)
+                .await
+                .map_err(|error| worker::Error::RustError(error.to_string()))?;
+            worker::Delay::from(std::time::Duration::from_millis(300)).await;
+            let seen: Vec<String> = sqlx::query_scalar("SELECT email FROM users ORDER BY id")
+                .fetch_all(&mut *tx)
+                .await
+                .map_err(|error| worker::Error::RustError(error.to_string()))?;
+            tx.rollback()
+                .await
+                .map_err(|error| worker::Error::RustError(error.to_string()))?;
+            serde_json::json!({ "rolled_back": true, "seen_inside": seen, "ended": now() })
+        }
         _ => return Response::error(format!("no step `{op}`"), 404),
     };
 
     Response::from_json(&body)
+}
+
+// ---- sqlx's own transactions: `begin()` / `commit()` / `rollback()`.
+
+async fn count_users(conn: &DoConnection) -> Result<i64, String> {
+    sqlx::query_scalar("SELECT COUNT(*) FROM users")
+        .fetch_one(conn)
+        .await
+        .map_err(fail)
+}
+
+async fn begin_commit_keeps_writes(conn: &mut DoConnection) -> Outcome {
+    reset(conn).await?;
+
+    let mut tx = conn.begin().await.map_err(fail)?;
+    for email in ["c1@example.com", "c2@example.com"] {
+        sqlx::query("INSERT INTO users (email) VALUES (?)")
+            .bind(email)
+            .execute(&mut *tx)
+            .await
+            .map_err(fail)?;
+    }
+    tx.commit().await.map_err(fail)?;
+
+    let count = count_users(conn).await?;
+    ensure(count == 2, format!("{count} users after commit"))
+}
+
+async fn begin_rollback_undoes_writes(conn: &mut DoConnection) -> Outcome {
+    reset(conn).await?;
+
+    let mut tx = conn.begin().await.map_err(fail)?;
+    sqlx::query("INSERT INTO users (email) VALUES ('undone@example.com')")
+        .execute(&mut *tx)
+        .await
+        .map_err(fail)?;
+    tx.rollback().await.map_err(fail)?;
+
+    let count = count_users(conn).await?;
+    ensure(count == 0, format!("{count} users after rollback"))
+}
+
+// sqlx rolls a dropped `Transaction` back without waiting; a write made right
+// after the drop must not land inside the dying transaction and be undone
+// with it. Measured to happen without `DoConnection::settle`.
+async fn dropped_transaction_rolls_back_before_the_next_query(conn: &mut DoConnection) -> Outcome {
+    reset(conn).await?;
+
+    let mut tx = conn.begin().await.map_err(fail)?;
+    sqlx::query("INSERT INTO users (email) VALUES ('dropped@example.com')")
+        .execute(&mut *tx)
+        .await
+        .map_err(fail)?;
+    drop(tx);
+
+    sqlx::query("INSERT INTO users (email) VALUES ('after@example.com')")
+        .execute(&*conn)
+        .await
+        .map_err(fail)?;
+
+    let emails: Vec<String> = sqlx::query_scalar("SELECT email FROM users ORDER BY id")
+        .fetch_all(&*conn)
+        .await
+        .map_err(fail)?;
+    ensure(emails == ["after@example.com"], format!("left {emails:?}"))
+}
+
+// Statements run outside the parked callback are part of the transaction,
+// across a timer: they see their own writes, and a `RETURNING` value feeds
+// the next statement.
+async fn begin_reads_its_own_writes_across_awaits(conn: &mut DoConnection) -> Outcome {
+    reset(conn).await?;
+
+    let mut tx = conn.begin().await.map_err(fail)?;
+    let id: i64 =
+        sqlx::query_scalar("INSERT INTO users (email) VALUES ('own@example.com') RETURNING id")
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(fail)?;
+    worker::Delay::from(std::time::Duration::from_millis(50)).await;
+    sqlx::query("INSERT INTO posts (user_id, title) VALUES (?, 'mine')")
+        .bind(id)
+        .execute(&mut *tx)
+        .await
+        .map_err(fail)?;
+    let inside: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM posts WHERE user_id = ?")
+        .bind(id)
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(fail)?;
+    tx.commit().await.map_err(fail)?;
+
+    ensure(inside == 1, format!("saw {inside} posts inside"))?;
+    let owner: i64 = sqlx::query_scalar("SELECT user_id FROM posts WHERE title = 'mine'")
+        .fetch_one(&*conn)
+        .await
+        .map_err(fail)?;
+    ensure(owner == id, format!("post owned by {owner}, user {id}"))
+}
+
+// sqlx drops a guard -- and calls `start_rollback` -- when `begin()` fails,
+// so a refused nested `begin()` must not take the outer transaction with it:
+// what the outer wrote before and after the refusal both commit.
+async fn nested_begin_is_refused(conn: &mut DoConnection) -> Outcome {
+    reset(conn).await?;
+
+    let mut tx = conn.begin().await.map_err(fail)?;
+    sqlx::query("INSERT INTO users (email) VALUES ('before@example.com')")
+        .execute(&mut *tx)
+        .await
+        .map_err(fail)?;
+
+    let nested = tx.begin().await.map(|_| ());
+    ensure(nested.is_err(), "a nested begin() succeeded")?;
+
+    sqlx::query("INSERT INTO users (email) VALUES ('after@example.com')")
+        .execute(&mut *tx)
+        .await
+        .map_err(fail)?;
+    tx.commit().await.map_err(fail)?;
+
+    let emails: Vec<String> = sqlx::query_scalar("SELECT email FROM users ORDER BY id")
+        .fetch_all(&*conn)
+        .await
+        .map_err(fail)?;
+    ensure(
+        emails == ["before@example.com", "after@example.com"],
+        format!("left {emails:?}: the refusal rolled the outer transaction back"),
+    )
+}
+
+// Storage would nest these inside the parked transaction, whose callback
+// waits on a commit that could never come; they fail instead, and the open
+// transaction carries on.
+async fn batches_and_callbacks_are_refused_while_open(conn: &mut DoConnection) -> Outcome {
+    reset(conn).await?;
+
+    let mut tx = conn.begin().await.map_err(fail)?;
+    let batch = tx
+        .execute_batch([sqlx::query(
+            "INSERT INTO users (email) VALUES ('batch@example.com')",
+        )])
+        .await;
+    ensure(batch.is_err(), "a batch ran inside an open transaction")?;
+    let callback = tx
+        .transaction(|_| async move { Ok::<_, sqlx::Error>(()) })
+        .await;
+    ensure(
+        callback.is_err(),
+        "a callback transaction ran inside an open one",
+    )?;
+
+    sqlx::query("INSERT INTO users (email) VALUES ('open@example.com')")
+        .execute(&mut *tx)
+        .await
+        .map_err(fail)?;
+    tx.commit().await.map_err(fail)?;
+
+    let emails: Vec<String> = sqlx::query_scalar("SELECT email FROM users ORDER BY id")
+        .fetch_all(&*conn)
+        .await
+        .map_err(fail)?;
+    ensure(emails == ["open@example.com"], format!("left {emails:?}"))
 }

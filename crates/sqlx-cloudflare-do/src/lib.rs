@@ -40,7 +40,9 @@
 //! ```
 //!
 //! The database lives in the Durable Object: queries never leave the process,
-//! and each one runs to completion before its future first returns. The class
+//! and each one runs to completion when its future is first polled.
+//! Transactions are real: sqlx's `begin()` / `commit()` work as with any
+//! driver, and [`DoConnection::transaction`] takes them as a callback. The class
 //! must be declared with `new_sqlite_classes` in `wrangler.toml` -- the
 //! key-value-backed kind has no SQL storage.
 //!
@@ -48,10 +50,10 @@
 //!
 //! Each of these fails loudly rather than pretending:
 //!
-//! - **`begin()`.** It returns an error: `sql.exec` rejects `BEGIN` and
-//!   `SAVEPOINT`. Transactions take a callback instead --
-//!   [`DoConnection::transaction`] -- and [`DoConnection::execute_batch`] runs
-//!   several statements atomically without one.
+//! - **Nested transactions.** sqlx's `begin()`, `commit()` and `rollback()`
+//!   work -- see [`DoTransactionManager`] -- as does
+//!   [`DoConnection::transaction`], but `begin()` inside an open transaction
+//!   (a savepoint, to sqlx) fails: `sql.exec` rejects `SAVEPOINT`.
 //! - **Integers beyond ±(2^53 − 1).** Values cross as JavaScript numbers, so
 //!   binding a wider `i64` is an encode error rather than a rounded value.
 //!   See [`types`].

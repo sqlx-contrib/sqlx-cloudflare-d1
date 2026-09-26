@@ -29,7 +29,10 @@ worker = { workspace = true }
 wasm-bindgen = { workspace = true }
 js-sys = { workspace = true }
 futures-core = { workspace = true }
-futures-util = { workspace = true, features = ["alloc"] }
+# `std` for `Shared`: every query waits on a dropped transaction's rollback.
+futures-util = { workspace = true, features = ["alloc", "std"] }
+# One-shot signals to the transaction `begin()` parks open.
+futures-channel = { workspace = true, features = ["alloc"] }
 # Only for `log::LevelFilter`, which `ConnectOptions` names in its signatures.
 log = { workspace = true }
 

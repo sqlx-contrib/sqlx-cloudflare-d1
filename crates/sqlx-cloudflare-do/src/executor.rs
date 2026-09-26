@@ -14,11 +14,12 @@ use crate::{
     js, Do, DoArguments, DoConnection, DoQueryResult, DoRow, DoStatement, DoTransaction, DoTypeInfo,
 };
 
-// `sql.exec` is synchronous, so each future here finishes on its first poll
-// and holds nothing across an `await` -- which is why none of them needs
-// D1's `SendFuture`: they are `Send` because `DoConnection` and
-// `DoTransaction` are `Sync`. They still run the query when polled, not when
-// built, as sqlx's futures do.
+// `sql.exec` is synchronous, so each future here runs its query on its first
+// poll -- after, on a connection, waiting for any dropped transaction's
+// rollback to land (see `DoConnection::settle`). None of them needs D1's
+// `SendFuture`: what they hold across that wait is `Send`, and they are
+// `Send` because `DoConnection` and `DoTransaction` are `Sync`. They still
+// run the query when polled, not when built, as sqlx's futures do.
 //
 // One implementation for both executors, a connection and an open transaction:
 // each only needs its `sql` handle, and a macro writes the impls for each.
@@ -34,6 +35,7 @@ macro_rules! impl_executor {
                 E: 'q + Execute<'q, Do>,
             {
                 async move {
+                    self.settle().await;
                     let (sql, arguments) = take(query)?;
                     js::run(&self.sql, sql.as_str(), arguments_of(arguments.as_ref()))
                 }
@@ -62,6 +64,7 @@ macro_rules! impl_executor {
                 E: 'q + Execute<'q, Do>,
             {
                 async move {
+                    self.settle().await;
                     let (sql, arguments) = take(query)?;
                     js::fetch(
                         &self.sql,
@@ -85,6 +88,7 @@ macro_rules! impl_executor {
                 E: 'q + Execute<'q, Do>,
             {
                 async move {
+                    self.settle().await;
                     let (sql, arguments) = take(query)?;
                     let (rows, _) = js::fetch(
                         &self.sql,

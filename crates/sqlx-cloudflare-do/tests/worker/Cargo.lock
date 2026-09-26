@@ -980,8 +980,9 @@ dependencies = [
 
 [[package]]
 name = "sqlx-cloudflare-do"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
+ "futures-channel",
  "futures-core",
  "futures-util",
  "js-sys",
