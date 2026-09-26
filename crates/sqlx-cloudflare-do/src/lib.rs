@@ -93,8 +93,8 @@ pub use value::{DoValue, DoValueRef};
 // underneath.
 #[doc(inline)]
 pub use sqlx_cloudflare_core::{
-    ArgumentValue as DoArgumentValue, DatabaseError as DoDatabaseError,
-    QueryResult as DoQueryResult, TypeInfo as DoTypeInfo,
+    DatabaseError as DoDatabaseError, QueryResult as DoQueryResult, TypeInfo as DoTypeInfo,
+    Value as DoArgumentValue,
 };
 
 /// An executor for Durable Object storage: `&DoConnection` or

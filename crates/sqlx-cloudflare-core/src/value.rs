@@ -9,8 +9,8 @@ use sqlx_core::error::BoxDynError;
 /// read off each value as it arrives, and a column's type is the type of
 /// whatever is in it.
 ///
-/// Non-exhaustive, like [`ArgumentValue`](crate::ArgumentValue): a new
-/// storage class must not break a `match` outside this crate.
+/// Non-exhaustive, like [`Value`]: a new storage class must not break a
+/// `match` outside this crate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum TypeInfo {
@@ -48,21 +48,34 @@ impl sqlx_core::type_info::TypeInfo for TypeInfo {
     }
 }
 
-/// A value read out of a result, already converted from JavaScript.
+/// One SQLite value on the Rust side of the JavaScript boundary, in either
+/// direction: a parameter a query binds, or a value a result row holds.
 ///
-/// Owned, because the backends return a whole result set as JavaScript values
-/// and there is nothing on the Rust side for a row to borrow from.
+/// One type for both, as sqlx's `Any` driver has, because both directions
+/// are the same thing here -- plain values that cross as JavaScript ones.
+/// sqlx's built-in drivers split them only because what they read is a C
+/// handle or wire bytes, decoded lazily.
+///
+/// Owned rather than borrowed: sqlx 0.9's `Arguments` has no lifetime, and the
+/// backends return a whole result set as JavaScript values, leaving nothing on
+/// the Rust side for a row to borrow from.
+///
+/// Non-exhaustive so that a backend growing a representation -- a `BigInt`,
+/// say -- is not a breaking change for `Encode` impls outside this crate.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub enum Value {
-    /// SQL `NULL`.
+    /// SQL `NULL`: JavaScript `null`.
     Null,
-    /// A whole number within ±(2^53 − 1).
+    /// A whole number, within ±(2^53 − 1) because it crosses as a JavaScript
+    /// number and not a `BigInt`. A result only holds integers in that range;
+    /// binding a wider one is an encode error rather than a rounded value.
     Integer(i64),
-    /// Any other number.
+    /// Any other number, stored as `REAL`.
     Real(f64),
-    /// A string.
+    /// A JavaScript string, stored as `TEXT`.
     Text(String),
-    /// Bytes.
+    /// An `ArrayBuffer`, stored as `BLOB`.
     Blob(Vec<u8>),
 }
 

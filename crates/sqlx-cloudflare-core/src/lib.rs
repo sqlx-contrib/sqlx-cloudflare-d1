@@ -4,8 +4,8 @@
 //! [`sqlx-cloudflare-do`](https://docs.rs/sqlx-cloudflare-do) instead. Both are
 //! SQLite behind a JavaScript API, so they share what this crate holds:
 //!
-//! - the value model -- [`Value`], [`TypeInfo`], [`ArgumentValue`] -- and the
-//!   ±(2^53 − 1) rule JavaScript numbers impose on integers;
+//! - the value model -- [`Value`], bound and read alike, and [`TypeInfo`] --
+//!   and the ±(2^53 − 1) rule JavaScript numbers impose on integers;
 //! - the `Type`, `Encode` and `Decode` impls, written into each driver by
 //!   [`impl_types!`];
 //! - the conversion to and from JavaScript values ([`js`]);
@@ -26,7 +26,7 @@ mod row;
 mod types;
 mod value;
 
-pub use arguments::{add_argument, ArgumentValue};
+pub use arguments::add_argument;
 pub use error::DatabaseError;
 pub use result::QueryResult;
 pub use row::rows;

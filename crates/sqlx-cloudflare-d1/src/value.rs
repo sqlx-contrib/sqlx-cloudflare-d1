@@ -9,6 +9,9 @@ use crate::{D1TypeInfo, D1};
 ///
 /// Owned, because D1 returns the whole result set as JavaScript values and
 /// there is nothing on the Rust side for a row to borrow from.
+///
+/// It wraps [`D1ArgumentValue`](crate::D1ArgumentValue): a value read and
+/// a value bound are the same enum, as in sqlx's `Any` driver.
 #[derive(Debug, Clone, PartialEq)]
 pub struct D1Value(pub(crate) CoreValue);
 

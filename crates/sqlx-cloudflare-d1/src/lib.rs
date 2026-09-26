@@ -75,8 +75,8 @@ pub use value::{D1Value, D1ValueRef};
 // SQLite behind a JavaScript API, so they are the same types underneath.
 #[doc(inline)]
 pub use sqlx_cloudflare_core::{
-    ArgumentValue as D1ArgumentValue, DatabaseError as D1DatabaseError,
-    QueryResult as D1QueryResult, TypeInfo as D1TypeInfo,
+    DatabaseError as D1DatabaseError, QueryResult as D1QueryResult, TypeInfo as D1TypeInfo,
+    Value as D1ArgumentValue,
 };
 
 /// An executor for D1: `&D1Connection` or `&mut D1Connection`.

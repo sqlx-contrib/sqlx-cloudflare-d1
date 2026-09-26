@@ -9,14 +9,14 @@ use sqlx_core::error::Error;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
 
-use crate::{safe_integer, ArgumentValue, DatabaseError, Value};
+use crate::{safe_integer, DatabaseError, Value};
 
 /// `values` as a JavaScript array, in placeholder order.
 ///
 /// # Errors
 ///
 /// When an integer is outside ±(2^53 − 1).
-pub fn to_js_array(values: &[ArgumentValue]) -> Result<Array, Error> {
+pub fn to_js_array(values: &[Value]) -> Result<Array, Error> {
     values.iter().map(to_js).collect()
 }
 
@@ -25,12 +25,12 @@ pub fn to_js_array(values: &[ArgumentValue]) -> Result<Array, Error> {
 /// # Errors
 ///
 /// When an integer is outside ±(2^53 − 1).
-pub fn to_js(value: &ArgumentValue) -> Result<JsValue, Error> {
+pub fn to_js(value: &Value) -> Result<JsValue, Error> {
     Ok(match value {
-        ArgumentValue::Null => JsValue::NULL,
+        Value::Null => JsValue::NULL,
         // Checked again here, not only in `Encode for i64`: a third-party
         // `Encode` impl can push any `Integer` it likes.
-        ArgumentValue::Integer(value) => {
+        Value::Integer(value) => {
             #[allow(
                 clippy::cast_precision_loss,
                 reason = "`safe_integer` has just checked the conversion is exact"
@@ -38,11 +38,11 @@ pub fn to_js(value: &ArgumentValue) -> Result<JsValue, Error> {
             let value = safe_integer(*value).map_err(Error::Encode)? as f64;
             JsValue::from_f64(value)
         }
-        ArgumentValue::Real(value) => JsValue::from_f64(*value),
-        ArgumentValue::Text(value) => JsValue::from_str(value),
+        Value::Real(value) => JsValue::from_f64(*value),
+        Value::Text(value) => JsValue::from_str(value),
         // An `ArrayBuffer`, which both backends store as BLOB. A fresh
         // `Uint8Array` owns a buffer of exactly its length.
-        ArgumentValue::Blob(value) => Uint8Array::from(value.as_slice()).buffer().into(),
+        Value::Blob(value) => Uint8Array::from(value.as_slice()).buffer().into(),
     })
 }
 
