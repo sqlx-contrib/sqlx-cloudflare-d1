@@ -21,14 +21,14 @@
 mod arguments;
 mod error;
 pub mod js;
-mod query_result;
+mod result;
 mod row;
 mod types;
 mod value;
 
 pub use arguments::{add_argument, ArgumentValue};
 pub use error::DatabaseError;
-pub use query_result::QueryResult;
+pub use result::QueryResult;
 pub use row::rows;
 pub use value::{safe_integer, AsValue, TypeInfo, Value, MAX_SAFE_INTEGER};
 
