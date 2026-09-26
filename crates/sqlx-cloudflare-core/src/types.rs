@@ -7,7 +7,7 @@
 /// what keeps the drivers agreeing on the mapping.
 ///
 /// `$db` must use [`TypeInfo`](crate::TypeInfo) as its `TypeInfo`,
-/// `Vec<`[`ArgumentValue`](crate::ArgumentValue)`>` as its `ArgumentBuffer`,
+/// `Vec<`[`Value`](crate::Value)`>` as its `ArgumentBuffer`,
 /// and a `ValueRef` implementing [`AsValue`](crate::AsValue).
 ///
 /// The mapping follows sqlx-sqlite wherever JavaScript does not force a
@@ -32,7 +32,7 @@ macro_rules! impl_types {
             use $crate::__sqlx_core::encode::{Encode, IsNull};
             use $crate::__sqlx_core::error::BoxDynError;
             use $crate::__sqlx_core::types::Type;
-            use $crate::{ArgumentValue, AsValue, TypeInfo};
+            use $crate::{AsValue, TypeInfo, Value};
 
             type ValueRef<'r> = <$db as $crate::__sqlx_core::database::Database>::ValueRef<'r>;
 
@@ -46,8 +46,8 @@ macro_rules! impl_types {
             }
 
             impl Encode<'_, $db> for bool {
-                fn encode_by_ref(&self, buf: &mut Vec<ArgumentValue>) -> Result<IsNull, BoxDynError> {
-                    buf.push(ArgumentValue::Integer(i64::from(*self)));
+                fn encode_by_ref(&self, buf: &mut Vec<Value>) -> Result<IsNull, BoxDynError> {
+                    buf.push(Value::Integer(i64::from(*self)));
                     Ok(IsNull::No)
                 }
             }
@@ -70,8 +70,8 @@ macro_rules! impl_types {
             }
 
             impl Encode<'_, $db> for i64 {
-                fn encode_by_ref(&self, buf: &mut Vec<ArgumentValue>) -> Result<IsNull, BoxDynError> {
-                    buf.push(ArgumentValue::Integer($crate::safe_integer(*self)?));
+                fn encode_by_ref(&self, buf: &mut Vec<Value>) -> Result<IsNull, BoxDynError> {
+                    buf.push(Value::Integer($crate::safe_integer(*self)?));
                     Ok(IsNull::No)
                 }
             }
@@ -98,8 +98,8 @@ macro_rules! impl_types {
             }
 
             impl Encode<'_, $db> for f64 {
-                fn encode_by_ref(&self, buf: &mut Vec<ArgumentValue>) -> Result<IsNull, BoxDynError> {
-                    buf.push(ArgumentValue::Real(*self));
+                fn encode_by_ref(&self, buf: &mut Vec<Value>) -> Result<IsNull, BoxDynError> {
+                    buf.push(Value::Real(*self));
                     Ok(IsNull::No)
                 }
             }
@@ -121,8 +121,8 @@ macro_rules! impl_types {
             }
 
             impl Encode<'_, $db> for f32 {
-                fn encode_by_ref(&self, buf: &mut Vec<ArgumentValue>) -> Result<IsNull, BoxDynError> {
-                    buf.push(ArgumentValue::Real(f64::from(*self)));
+                fn encode_by_ref(&self, buf: &mut Vec<Value>) -> Result<IsNull, BoxDynError> {
+                    buf.push(Value::Real(f64::from(*self)));
                     Ok(IsNull::No)
                 }
             }
@@ -144,8 +144,8 @@ macro_rules! impl_types {
             }
 
             impl Encode<'_, $db> for &'_ str {
-                fn encode_by_ref(&self, buf: &mut Vec<ArgumentValue>) -> Result<IsNull, BoxDynError> {
-                    buf.push(ArgumentValue::Text((*self).to_owned()));
+                fn encode_by_ref(&self, buf: &mut Vec<Value>) -> Result<IsNull, BoxDynError> {
+                    buf.push(Value::Text((*self).to_owned()));
                     Ok(IsNull::No)
                 }
             }
@@ -163,13 +163,13 @@ macro_rules! impl_types {
             }
 
             impl Encode<'_, $db> for String {
-                fn encode(self, buf: &mut Vec<ArgumentValue>) -> Result<IsNull, BoxDynError> {
-                    buf.push(ArgumentValue::Text(self));
+                fn encode(self, buf: &mut Vec<Value>) -> Result<IsNull, BoxDynError> {
+                    buf.push(Value::Text(self));
                     Ok(IsNull::No)
                 }
 
-                fn encode_by_ref(&self, buf: &mut Vec<ArgumentValue>) -> Result<IsNull, BoxDynError> {
-                    buf.push(ArgumentValue::Text(self.clone()));
+                fn encode_by_ref(&self, buf: &mut Vec<Value>) -> Result<IsNull, BoxDynError> {
+                    buf.push(Value::Text(self.clone()));
                     Ok(IsNull::No)
                 }
             }
@@ -193,8 +193,8 @@ macro_rules! impl_types {
             }
 
             impl Encode<'_, $db> for &'_ [u8] {
-                fn encode_by_ref(&self, buf: &mut Vec<ArgumentValue>) -> Result<IsNull, BoxDynError> {
-                    buf.push(ArgumentValue::Blob(self.to_vec()));
+                fn encode_by_ref(&self, buf: &mut Vec<Value>) -> Result<IsNull, BoxDynError> {
+                    buf.push(Value::Blob(self.to_vec()));
                     Ok(IsNull::No)
                 }
             }
@@ -216,13 +216,13 @@ macro_rules! impl_types {
             }
 
             impl Encode<'_, $db> for Vec<u8> {
-                fn encode(self, buf: &mut Vec<ArgumentValue>) -> Result<IsNull, BoxDynError> {
-                    buf.push(ArgumentValue::Blob(self));
+                fn encode(self, buf: &mut Vec<Value>) -> Result<IsNull, BoxDynError> {
+                    buf.push(Value::Blob(self));
                     Ok(IsNull::No)
                 }
 
-                fn encode_by_ref(&self, buf: &mut Vec<ArgumentValue>) -> Result<IsNull, BoxDynError> {
-                    buf.push(ArgumentValue::Blob(self.clone()));
+                fn encode_by_ref(&self, buf: &mut Vec<Value>) -> Result<IsNull, BoxDynError> {
+                    buf.push(Value::Blob(self.clone()));
                     Ok(IsNull::No)
                 }
             }
@@ -258,9 +258,9 @@ macro_rules! __impl_narrow_int {
         impl $crate::__sqlx_core::encode::Encode<'_, $db> for $ty {
             fn encode_by_ref(
                 &self,
-                buf: &mut Vec<$crate::ArgumentValue>,
+                buf: &mut Vec<$crate::Value>,
             ) -> Result<$crate::__sqlx_core::encode::IsNull, $crate::__sqlx_core::error::BoxDynError> {
-                buf.push($crate::ArgumentValue::Integer(i64::from(*self)));
+                buf.push($crate::Value::Integer(i64::from(*self)));
                 Ok($crate::__sqlx_core::encode::IsNull::No)
             }
         }
@@ -282,7 +282,7 @@ macro_rules! __impl_encode_via_ref {
         impl $crate::__sqlx_core::encode::Encode<'_, $db> for $ty {
             fn encode_by_ref(
                 &self,
-                buf: &mut Vec<$crate::ArgumentValue>,
+                buf: &mut Vec<$crate::Value>,
             ) -> Result<$crate::__sqlx_core::encode::IsNull, $crate::__sqlx_core::error::BoxDynError> {
                 <$by as $crate::__sqlx_core::encode::Encode<$db>>::encode(&**self, buf)
             }

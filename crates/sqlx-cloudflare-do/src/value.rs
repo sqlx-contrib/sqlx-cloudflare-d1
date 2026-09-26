@@ -10,6 +10,9 @@ use crate::{Do, DoTypeInfo};
 ///
 /// Owned, because every row is read out of the cursor when the query runs, and
 /// there is nothing on the Rust side for a row to borrow from.
+///
+/// It wraps [`DoArgumentValue`](crate::DoArgumentValue): a value read and
+/// a value bound are the same enum, as in sqlx's `Any` driver.
 #[derive(Debug, Clone, PartialEq)]
 pub struct DoValue(pub(crate) CoreValue);
 
