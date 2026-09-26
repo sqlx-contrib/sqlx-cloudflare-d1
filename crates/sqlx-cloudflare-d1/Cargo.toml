@@ -1,0 +1,42 @@
+[package]
+name = "sqlx-cloudflare-d1"
+description = "A Cloudflare D1 driver for sqlx: an sqlx::Database over the Workers D1 binding"
+version = "0.1.0" # literal, not inherited -- see [workspace.package]
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+readme = "README.md"
+keywords = ["sqlx", "cloudflare", "d1", "workers", "sqlite"]
+categories = ["database", "wasm"]
+# The test Worker is not part of the library.
+exclude = ["tests/worker"]
+
+[lints]
+workspace = true
+
+[features]
+default = []
+
+[dependencies]
+sqlx-core = { workspace = true }
+worker = { workspace = true, features = ["d1"] }
+wasm-bindgen = { workspace = true }
+js-sys = { workspace = true }
+futures-core = { workspace = true }
+futures-util = { workspace = true, features = ["alloc"] }
+# Only for `log::LevelFilter`, which `ConnectOptions` names in its signatures.
+log = { workspace = true }
+
+[dev-dependencies]
+# The facade, only to prove that a consumer naming `sqlx::Database` and using
+# `#[derive(sqlx::FromRow)]` sees this crate's `D1` -- see `tests/facade.rs`.
+# `macros` is sqlx's default, and the one that turns on `sqlx-core/offline`.
+sqlx = { workspace = true, features = ["derive", "macros"] }
+# `tests/driver.rs` drives the test Worker over plain HTTP on localhost, so no TLS.
+ureq = { workspace = true }
+serde_json = { workspace = true }
+
+[package.metadata.docs.rs]
+all-features = true
+targets = ["wasm32-unknown-unknown"]

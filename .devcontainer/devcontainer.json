@@ -1,6 +1,6 @@
 {
   "$schema": "https://raw.githubusercontent.com/devcontainers/spec/refs/heads/main/schemas/devContainer.base.schema.json",
-  "name": "sqlx-cloudflare-d1",
+  "name": "sqlx-cloudflare",
   // A plain image, no compose file: there is no database server to run. D1
   // runs inside `wrangler dev --local`, which the Nix shell provides.
   "image": "mcr.microsoft.com/devcontainers/base:bookworm",

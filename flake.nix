@@ -1,5 +1,5 @@
 {
-  description = "sqlx-cloudflare-d1 - a Cloudflare D1 driver for sqlx, over the Workers D1 binding.";
+  description = "sqlx-cloudflare - sqlx drivers for Cloudflare Workers.";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
@@ -34,7 +34,7 @@
       in
       {
         devShells.default = pkgs.mkShell {
-          name = "sqlx-cloudflare-d1";
+          name = "sqlx-cloudflare";
 
           packages = [
             rust-toolchain
