@@ -970,6 +970,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "sqlx-cloudflare-core"
+version = "0.1.0"
+dependencies = [
+ "js-sys",
+ "sqlx-core",
+ "wasm-bindgen",
+]
+
+[[package]]
 name = "sqlx-cloudflare-d1"
 version = "0.1.0"
 dependencies = [
@@ -977,6 +986,7 @@ dependencies = [
  "futures-util",
  "js-sys",
  "log",
+ "sqlx-cloudflare-core",
  "sqlx-core",
  "wasm-bindgen",
  "worker",

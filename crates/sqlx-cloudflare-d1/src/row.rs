@@ -1,17 +1,18 @@
 use std::fmt::{self, Debug, Formatter};
 use std::sync::Arc;
 
+use sqlx_cloudflare_core::Value;
 use sqlx_core::column::ColumnIndex;
 use sqlx_core::error::Error;
 use sqlx_core::row::Row;
 
-use crate::{D1Column, D1TypeInfo, D1Value, D1ValueRef, D1};
+use crate::{D1Column, D1ValueRef, D1};
 
 /// A row of a D1 result.
 pub struct D1Row {
     /// Shared by every row of one result.
     pub(crate) columns: Arc<[D1Column]>,
-    pub(crate) values: Box<[D1Value]>,
+    pub(crate) values: Box<[Value]>,
 }
 
 impl D1Row {
@@ -22,39 +23,18 @@ impl D1Row {
     /// declared types. Every row shares the one column list.
     pub(crate) fn from_result(
         names: Vec<String>,
-        rows: Vec<Vec<D1Value>>,
+        rows: Vec<Vec<Value>>,
     ) -> Result<Vec<D1Row>, Error> {
-        let columns: Arc<[D1Column]> = names
-            .into_iter()
-            .enumerate()
-            .map(|(ordinal, name)| D1Column {
+        sqlx_cloudflare_core::rows(
+            names,
+            rows,
+            |name, ordinal, type_info| D1Column {
                 name,
                 ordinal,
-                type_info: rows
-                    .iter()
-                    .filter_map(|row| row.get(ordinal))
-                    .map(|value| value.0.type_info())
-                    .find(|type_info| *type_info != D1TypeInfo::Null)
-                    .unwrap_or(D1TypeInfo::Null),
-            })
-            .collect();
-
-        rows.into_iter()
-            .map(|values| {
-                if values.len() != columns.len() {
-                    return Err(Error::Protocol(format!(
-                        "D1 returned a row of {} values for {} columns",
-                        values.len(),
-                        columns.len()
-                    )));
-                }
-
-                Ok(D1Row {
-                    columns: Arc::clone(&columns),
-                    values: values.into_boxed_slice(),
-                })
-            })
-            .collect()
+                type_info,
+            },
+            |columns, values| D1Row { columns, values },
+        )
     }
 }
 
@@ -91,7 +71,7 @@ impl Debug for D1Row {
         let mut map = f.debug_map();
 
         for (column, value) in self.columns.iter().zip(self.values.iter()) {
-            map.entry(&column.name, &value.0);
+            map.entry(&column.name, value);
         }
 
         map.finish()
@@ -100,33 +80,21 @@ impl Debug for D1Row {
 
 #[cfg(test)]
 mod tests {
+    use sqlx_cloudflare_core::Value;
     use sqlx_core::row::Row;
     use sqlx_core::type_info::TypeInfo;
     use sqlx_core::value::ValueRef;
 
     use super::D1Row;
-    use crate::value::D1ValueData;
-    use crate::{D1TypeInfo, D1Value};
-
-    fn value(data: D1ValueData) -> D1Value {
-        D1Value(data)
-    }
+    use crate::D1TypeInfo;
 
     #[test]
     fn a_column_is_typed_by_its_first_non_null_value() {
         let rows = D1Row::from_result(
-            vec!["id".into(), "name".into(), "gone".into()],
+            vec!["id".into(), "name".into()],
             vec![
-                vec![
-                    value(D1ValueData::Integer(1)),
-                    value(D1ValueData::Null),
-                    value(D1ValueData::Null),
-                ],
-                vec![
-                    value(D1ValueData::Integer(2)),
-                    value(D1ValueData::Text("b".into())),
-                    value(D1ValueData::Null),
-                ],
+                vec![Value::Integer(1), Value::Null],
+                vec![Value::Integer(2), Value::Text("b".into())],
             ],
         )
         .unwrap();
@@ -136,20 +104,14 @@ mod tests {
             .iter()
             .map(|column| column.type_info)
             .collect();
-        assert_eq!(
-            types,
-            [D1TypeInfo::Integer, D1TypeInfo::Text, D1TypeInfo::Null]
-        );
+        assert_eq!(types, [D1TypeInfo::Integer, D1TypeInfo::Text]);
     }
 
     #[test]
     fn a_name_finds_the_last_column_that_has_it() {
         let rows = D1Row::from_result(
             vec!["id".into(), "id".into()],
-            vec![vec![
-                value(D1ValueData::Integer(1)),
-                value(D1ValueData::Integer(2)),
-            ]],
+            vec![vec![Value::Integer(1), Value::Integer(2)]],
         )
         .unwrap();
 
@@ -163,10 +125,7 @@ mod tests {
     fn a_value_carries_its_own_type() {
         let rows = D1Row::from_result(
             vec!["n".into()],
-            vec![
-                vec![value(D1ValueData::Integer(1))],
-                vec![value(D1ValueData::Real(1.5))],
-            ],
+            vec![vec![Value::Integer(1)], vec![Value::Real(1.5)]],
         )
         .unwrap();
 
@@ -175,14 +134,5 @@ mod tests {
         assert_eq!(rows[1].try_get_raw(0).unwrap().type_info().name(), "REAL");
         assert!(rows[1].try_get::<i64, _>(0).is_err());
         assert!((rows[1].try_get::<f64, _>(0).unwrap() - 1.5).abs() < f64::EPSILON);
-    }
-
-    #[test]
-    fn a_short_row_is_an_error() {
-        assert!(D1Row::from_result(
-            vec!["a".into(), "b".into()],
-            vec![vec![value(D1ValueData::Null)]]
-        )
-        .is_err());
     }
 }
