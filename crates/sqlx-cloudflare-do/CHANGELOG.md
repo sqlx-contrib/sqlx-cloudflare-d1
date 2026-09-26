@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.0](https://github.com/sqlx-contrib/sqlx-cloudflare/compare/sqlx-cloudflare-do-v0.1.0...sqlx-cloudflare-do-v0.2.0) (2026-09-26)
+
+
+### Features
+
+* **do:** add DoConnection::transaction, interactive transactions ([1f14646](https://github.com/sqlx-contrib/sqlx-cloudflare/commit/1f146460df5b62486e16e8676e6cb2fe64eea138)), closes [#7](https://github.com/sqlx-contrib/sqlx-cloudflare/issues/7)
+
 ## [0.1.0](https://github.com/sqlx-contrib/sqlx-cloudflare/compare/sqlx-cloudflare-do-v0.1.0...sqlx-cloudflare-do-v0.1.0) (2026-09-26)
 
 
