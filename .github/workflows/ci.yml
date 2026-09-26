@@ -62,7 +62,9 @@ jobs:
     outputs:
       # `releases_created`, plural: that is the output a manifest config sets.
       release_created: ${{ steps.release.outputs.releases_created }}
-      tag_name: ${{ steps.release.outputs.tag_name }}
+      # The crates this run released, as a JSON array of their paths: each
+      # crate is versioned on its own, so a release need not include them all.
+      paths_released: ${{ steps.release.outputs.paths_released }}
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -108,9 +110,15 @@ jobs:
         uses: rust-lang/crates-io-auth-action@v1
         id: auth
 
-      # `--workspace`, as in sqlx-query: it walks the dependency graph, so a
-      # crate goes up only after the workspace crates it depends on.
+      # Only the crates this run released, one `-p` each -- not `--workspace`,
+      # which would also try every other crate at a version crates.io already
+      # has, and fail. One `cargo publish` for all of them still walks the
+      # dependency graph, so sqlx-cloudflare-core goes up before a driver that
+      # needs its new version.
       - name: Publish to Crates.io
-        run: nix develop --command cargo publish --workspace
         env:
           CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+          PATHS_RELEASED: ${{ needs.release.outputs.paths_released }}
+        run: |
+          packages=$(jq -r '.[] | "-p " + (split("/") | last)' <<<"$PATHS_RELEASED")
+          nix develop --command cargo publish $packages
