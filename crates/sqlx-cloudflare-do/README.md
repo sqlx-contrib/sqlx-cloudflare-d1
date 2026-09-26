@@ -4,7 +4,10 @@
 > Durable Object's SQL storage, so code written against sqlx's runtime API
 > runs inside a Rust Durable Object.
 
+[![crates.io](https://img.shields.io/crates/v/sqlx-cloudflare-do.svg)](https://crates.io/crates/sqlx-cloudflare-do)
+[![docs.rs](https://img.shields.io/docsrs/sqlx-cloudflare-do)](https://docs.rs/sqlx-cloudflare-do)
 [![CI](https://github.com/sqlx-contrib/sqlx-cloudflare/actions/workflows/ci.yml/badge.svg)](https://github.com/sqlx-contrib/sqlx-cloudflare/actions/workflows/ci.yml)
+[![MSRV](https://img.shields.io/crates/msrv/sqlx-cloudflare-do)](https://github.com/sqlx-contrib/sqlx-cloudflare/blob/main/Cargo.toml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://github.com/sqlx-contrib/sqlx-cloudflare/blob/main/LICENSE)
 
 > [!NOTE]
@@ -58,7 +61,7 @@ new_sqlite_classes = ["Users"]
 
 ```toml
 [dependencies]
-sqlx-cloudflare-do = "0.1"
+sqlx-cloudflare-do = "0.2"
 sqlx = { version = "0.9", default-features = false, features = ["derive"] }
 worker = "0.8"
 # `#[durable_object]` expands to code that names it directly.
@@ -67,6 +70,7 @@ wasm-bindgen = "0.2"
 
 | sqlx-cloudflare-do | sqlx | worker | Rust |
 |---|---|---|---|
+| 0.2 | 0.9 | 0.8 | 1.94+ |
 | 0.1 | 0.9 | 0.8 | 1.94+ |
 
 The crate runs on `wasm32-unknown-unknown`, inside a Durable Object.
@@ -76,22 +80,64 @@ The crate runs on `wasm32-unknown-unknown`, inside a Durable Object.
 The database lives in the Durable Object, so a query never leaves the
 process: `sql.exec` runs it before returning, and the driver reads every row
 out on the spot. Each query's future finishes on its first poll. Types map
-exactly as in [`sqlx-cloudflare-d1`](https://crates.io/crates/sqlx-cloudflare-d1) -- the two share
-one definition.
+exactly as in
+[`sqlx-cloudflare-d1`](https://crates.io/crates/sqlx-cloudflare-d1) -- the
+two share one definition.
+
+## Transactions
+
+`sql.exec` rejects `BEGIN`, so a transaction is a callback. It commits when
+the callback returns `Ok` and rolls back every write when it returns `Err`,
+and inside it you read your own writes:
+
+```rust
+let id = conn
+    .transaction(move |tx| async move {
+        let id: i64 = sqlx::query_scalar("INSERT INTO users (email) VALUES (?) RETURNING id")
+            .bind(email)
+            .fetch_one(&tx)
+            .await?;
+        sqlx::query("INSERT INTO posts (user_id, title) VALUES (?, 'hello')")
+            .bind(id)
+            .execute(&tx)
+            .await?;
+        Ok::<_, sqlx::Error>(id)
+    })
+    .await?;
+```
+
+- **The callback owns what it uses.** It is `'static` -- move data in, and run
+  queries through the `tx` it is handed, not the connection.
+- **It holds the whole object.** No other request reaches the object until
+  the transaction ends, even while the callback awaits something that is not
+  storage. That keeps other requests' writes out of it -- and is why it should
+  be short: no `fetch()` inside, and never a request to the object itself.
+
+## Batches
+
+`execute_batch` runs statements atomically without a callback, and
+`fetch_batch` streams each statement's rows and result as well -- the shape of
+sqlc's `:batchexec`, `:batchone` and `:batchmany` queries:
+
+```rust
+use futures_util::TryStreamExt;
+use sqlx::Row;
+
+let names: Vec<String> = conn
+    .fetch_batch([1_i64, 2, 3].map(|id| {
+        sqlx::query("SELECT name FROM users WHERE id = ?").bind(id)
+    }))
+    .map_ok(|result| result.rows()[0].get("name"))
+    .try_collect()
+    .await?;
+```
 
 ## Limitations
 
 - **No `query!` / `query_as!` macros.** sqlx's macros only know its built-in
   drivers. The runtime API (`sqlx::query`, `query_as`, `FromRow`) works.
-- **Transactions take a callback, not `begin()`.** `sql.exec` rejects `BEGIN`
-  and `SAVEPOINT`, so `begin()` fails. `DoConnection::transaction` runs a
-  callback inside `Storage::transaction` instead: a real transaction that reads
-  its own writes and rolls back when the callback returns `Err`. The callback
-  must own what it uses (`'static`), and the object serves no other request
-  until it ends, so keep it short -- no `fetch()` inside.
-- **Batches.** `DoConnection::execute_batch` runs statements atomically, and
-  `DoConnection::fetch_batch` streams each statement's rows and result as
-  well -- the shape of sqlc's `:batch*` queries.
+- **No `begin()`.** `sql.exec` rejects `BEGIN` and `SAVEPOINT`, so sqlx's
+  `begin()` fails. Use a [transaction callback](#transactions).
 - **No `sqlx::Pool`.** Nothing to pool: the connection is a handle to storage
   the object owns. Keep one in the object's struct.
 - **Integers are limited to ±(2^53 − 1).** Values cross as JavaScript
