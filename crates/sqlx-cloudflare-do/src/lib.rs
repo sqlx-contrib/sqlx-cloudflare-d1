@@ -48,9 +48,10 @@
 //!
 //! Each of these fails loudly rather than pretending:
 //!
-//! - **Transactions.** `begin()` returns an error: `sql.exec` rejects `BEGIN`
-//!   and `SAVEPOINT`. [`DoConnection::execute_batch`] runs several statements
-//!   atomically instead.
+//! - **`begin()`.** It returns an error: `sql.exec` rejects `BEGIN` and
+//!   `SAVEPOINT`. Transactions take a callback instead --
+//!   [`DoConnection::transaction`] -- and [`DoConnection::execute_batch`] runs
+//!   several statements atomically without one.
 //! - **Integers beyond ±(2^53 − 1).** Values cross as JavaScript numbers, so
 //!   binding a wider `i64` is an encode error rather than a rounded value.
 //!   See [`types`].
@@ -85,7 +86,7 @@ pub use connection::{DoConnectOptions, DoConnection};
 pub use database::Do;
 pub use row::DoRow;
 pub use statement::DoStatement;
-pub use transaction::DoTransactionManager;
+pub use transaction::{DoTransaction, DoTransactionManager};
 pub use value::{DoValue, DoValueRef};
 
 // The types Durable Object storage shares with D1, under this crate's names:

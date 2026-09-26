@@ -1,6 +1,4 @@
-use std::cell::RefCell;
 use std::future::Future;
-use std::rc::Rc;
 
 use futures_core::Stream;
 use futures_util::{stream, TryFutureExt};
@@ -8,7 +6,6 @@ use sqlx_cloudflare_core::BatchResult;
 use sqlx_core::error::Error;
 use sqlx_core::executor::Execute;
 use sqlx_core::query::Query;
-use worker::send::SendFuture;
 
 use crate::{js, Do, DoArguments, DoBatchResult, DoConnection, DoQueryResult};
 
@@ -18,8 +15,8 @@ impl DoConnection {
     ///
     /// This is the Durable Object answer to a transaction, which `sql.exec`
     /// does not allow (see [`DoTransactionManager`](crate::DoTransactionManager)).
-    /// The statements run inside `Storage::transaction`, and a failing one
-    /// rolls the others back. Returns what each statement did, in the order
+    /// The statements run inside [`transaction`](Self::transaction), and a
+    /// failing one rolls the others back. Returns what each statement did, in the order
     /// given; for the rows each statement returns as well, see
     /// [`fetch_batch`](Self::fetch_batch).
     ///
@@ -124,56 +121,25 @@ impl DoConnection {
             })
             .collect::<Result<Vec<_>, Error>>();
 
-        // `Storage::transaction` and its callback's future hold JavaScript
-        // handles, so neither is `Send`; `SendFuture` asserts it, soundly,
-        // because a Durable Object runs on one thread.
-        SendFuture::new(async move {
+        async move {
             let queries = queries?;
 
             if queries.is_empty() {
                 return Ok(Vec::new());
             }
 
-            // The callback reports through this rather than its return value,
-            // which `worker` flattens to a string: the statement's own error,
-            // with its `ErrorKind`, is what the caller should see.
-            let outcome = Rc::new(RefCell::new(None));
-            let slot = Rc::clone(&outcome);
-            let sql = self.sql.clone();
-
-            let committed = self
-                .storage
-                .transaction(move |_| async move {
-                    let results = queries
-                        .iter()
-                        .map(|(query, arguments)| {
-                            js::execute(&sql, query.as_str(), arguments.values(), None)
-                                .map(|(rows, result)| BatchResult::new(rows, result))
-                        })
-                        .collect::<Result<Vec<_>, Error>>();
-                    let failed = results.is_err();
-                    *slot.borrow_mut() = Some(results);
-
-                    if failed {
-                        // Any error will do: rejecting is what rolls back.
-                        Err(worker::Error::RustError("a statement failed".into()))
-                    } else {
-                        Ok(())
-                    }
-                })
-                .await;
-
-            let outcome = outcome.borrow_mut().take();
-            match (committed, outcome) {
-                (_, Some(Err(error))) => Err(error),
-                (Ok(()), Some(Ok(results))) => Ok(results),
-                (Err(error), _) => Err(Error::Protocol(format!(
-                    "the Durable Object storage transaction failed: {error}"
-                ))),
-                (Ok(()), None) => Err(Error::Protocol(
-                    "the Durable Object storage transaction never ran its callback".into(),
-                )),
-            }
-        })
+            // Inside a transaction, statements run as they would outside
+            // one; the transaction is what makes a failure undo the rest.
+            self.transaction(move |tx| async move {
+                queries
+                    .iter()
+                    .map(|(query, arguments)| {
+                        js::execute(&tx.sql, query.as_str(), arguments.values(), None)
+                            .map(|(rows, result)| BatchResult::new(rows, result))
+                    })
+                    .collect::<Result<Vec<_>, Error>>()
+            })
+            .await
+        }
     }
 }

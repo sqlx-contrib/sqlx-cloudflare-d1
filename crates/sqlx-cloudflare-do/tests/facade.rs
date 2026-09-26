@@ -100,6 +100,10 @@ fn futures_are_send(conn: &mut DoConnection) {
     assert_send(insert_members(conn, &[UserId(1)]));
     assert_send(conn.execute_batch([sqlx::query("DELETE FROM users")]));
     assert_send(conn.fetch_batch([sqlx::query("SELECT * FROM users")]));
+    assert_send(conn.transaction(|tx| async move {
+        sqlx::query("DELETE FROM users").execute(&tx).await?;
+        Ok::<_, sqlx::Error>(())
+    }));
 }
 
 #[test]
