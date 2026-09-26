@@ -49,7 +49,7 @@
 //! Each of these fails loudly rather than pretending:
 //!
 //! - **Transactions.** `begin()` returns an error: `sql.exec` rejects `BEGIN`
-//!   and `SAVEPOINT`. [`DoConnection::batch`] runs several statements
+//!   and `SAVEPOINT`. [`DoConnection::execute_batch`] runs several statements
 //!   atomically instead.
 //! - **Integers beyond ±(2^53 − 1).** Values cross as JavaScript numbers, so
 //!   binding a wider `i64` is an encode error rather than a rounded value.
@@ -96,6 +96,10 @@ pub use sqlx_cloudflare_core::{
     DatabaseError as DoDatabaseError, QueryResult as DoQueryResult, TypeInfo as DoTypeInfo,
     Value as DoArgumentValue,
 };
+
+/// What one statement of a [`DoConnection::fetch_batch`] did, and the rows it
+/// returned.
+pub type DoBatchResult = sqlx_cloudflare_core::BatchResult<DoRow>;
 
 /// An executor for Durable Object storage: `&DoConnection` or
 /// `&mut DoConnection`.

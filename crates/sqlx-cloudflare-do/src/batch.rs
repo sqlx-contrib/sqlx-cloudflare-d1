@@ -2,12 +2,15 @@ use std::cell::RefCell;
 use std::future::Future;
 use std::rc::Rc;
 
+use futures_core::Stream;
+use futures_util::{stream, TryFutureExt};
+use sqlx_cloudflare_core::BatchResult;
 use sqlx_core::error::Error;
 use sqlx_core::executor::Execute;
 use sqlx_core::query::Query;
 use worker::send::SendFuture;
 
-use crate::{js, Do, DoArguments, DoConnection, DoQueryResult};
+use crate::{js, Do, DoArguments, DoBatchResult, DoConnection, DoQueryResult};
 
 impl DoConnection {
     /// Runs `queries` in order and atomically: if any statement fails, none
@@ -17,7 +20,8 @@ impl DoConnection {
     /// does not allow (see [`DoTransactionManager`](crate::DoTransactionManager)).
     /// The statements run inside `Storage::transaction`, and a failing one
     /// rolls the others back. Returns what each statement did, in the order
-    /// given; rows a statement returns are not reported.
+    /// given; for the rows each statement returns as well, see
+    /// [`fetch_batch`](Self::fetch_batch).
     ///
     /// ```no_run
     /// # async fn transfer(
@@ -27,7 +31,7 @@ impl DoConnection {
     /// #     to: i64,
     /// # ) -> Result<(), sqlx::Error> {
     /// let results = conn
-    ///     .batch([
+    ///     .execute_batch([
     ///         sqlx::query("UPDATE accounts SET balance = balance - ?1 WHERE id = ?2")
     ///             .bind(amount)
     ///             .bind(from),
@@ -44,10 +48,68 @@ impl DoConnection {
     ///
     /// When binding an argument fails, in which case nothing ran, or when any
     /// statement fails -- in which case the whole batch was rolled back.
-    pub fn batch<'q, I>(
+    pub fn execute_batch<'q, I>(
         &self,
         queries: I,
     ) -> impl Future<Output = Result<Vec<DoQueryResult>, Error>> + Send + '_
+    where
+        I: IntoIterator<Item = Query<'q, Do, DoArguments>>,
+    {
+        self.run_batch(queries).map_ok(|results| {
+            results
+                .into_iter()
+                .map(|result| result.into_parts().1)
+                .collect()
+        })
+    }
+
+    /// Runs `queries` in order and atomically, as
+    /// [`execute_batch`](Self::execute_batch) does, and streams each
+    /// statement's rows along with what it did, in the order given.
+    ///
+    /// The shape sqlc's `:batchexec`, `:batchone` and `:batchmany` queries
+    /// take, each a stream with one item per statement -- but atomic. So
+    /// unlike a loop of queries it is not lazy: the whole batch runs when the
+    /// stream is first polled, and a failure is the one item it yields, with
+    /// nothing applied.
+    ///
+    /// ```no_run
+    /// # async fn users(conn: &sqlx_cloudflare_do::DoConnection) -> Result<(), sqlx::Error> {
+    /// use futures_util::TryStreamExt;
+    /// use sqlx::Row;
+    ///
+    /// let names: Vec<String> = conn
+    ///     .fetch_batch([1_i64, 2, 3].map(|id| {
+    ///         sqlx::query("SELECT name FROM users WHERE id = ?").bind(id)
+    ///     }))
+    ///     .map_ok(|result| result.rows()[0].get("name"))
+    ///     .try_collect()
+    ///     .await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// The stream's one item is an error when binding an argument fails, in
+    /// which case nothing ran, or when any statement fails -- in which case
+    /// the whole batch was rolled back.
+    pub fn fetch_batch<'q, I>(
+        &self,
+        queries: I,
+    ) -> impl Stream<Item = Result<DoBatchResult, Error>> + Send + '_
+    where
+        I: IntoIterator<Item = Query<'q, Do, DoArguments>>,
+    {
+        self.run_batch(queries)
+            .map_ok(|results| stream::iter(results.into_iter().map(Ok)))
+            .try_flatten_stream()
+    }
+
+    fn run_batch<'q, I>(
+        &self,
+        queries: I,
+    ) -> impl Future<Output = Result<Vec<DoBatchResult>, Error>> + Send + '_
     where
         I: IntoIterator<Item = Query<'q, Do, DoArguments>>,
     {
@@ -84,7 +146,10 @@ impl DoConnection {
                 .transaction(move |_| async move {
                     let results = queries
                         .iter()
-                        .map(|(query, arguments)| js::run(&sql, query.as_str(), arguments.values()))
+                        .map(|(query, arguments)| {
+                            js::execute(&sql, query.as_str(), arguments.values(), None)
+                                .map(|(rows, result)| BatchResult::new(rows, result))
+                        })
                         .collect::<Result<Vec<_>, Error>>();
                     let failed = results.is_err();
                     *slot.borrow_mut() = Some(results);

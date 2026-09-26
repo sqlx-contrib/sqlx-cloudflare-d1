@@ -21,7 +21,9 @@ use crate::Do;
 /// connection kept in the object's struct serves every request through
 /// `&self`.
 pub struct DoConnection {
-    /// For [`batch`](Self::batch), which runs through `Storage::transaction`.
+    /// For [`execute_batch`](Self::execute_batch) and
+    /// [`fetch_batch`](Self::fetch_batch), which run through
+    /// `Storage::transaction`.
     pub(crate) storage: worker::Storage,
     /// `storage.sql()`, kept rather than fetched for every query.
     pub(crate) sql: worker::SqlStorage,

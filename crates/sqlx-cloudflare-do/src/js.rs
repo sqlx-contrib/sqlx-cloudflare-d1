@@ -79,35 +79,48 @@ pub(crate) fn fetch(
 }
 
 /// Runs `sql` for its effect, and returns what it did.
+pub(crate) fn run(
+    storage: &worker::SqlStorage,
+    sql: &str,
+    arguments: &[DoArgumentValue],
+) -> Result<QueryResult, Error> {
+    execute(storage, sql, arguments, Some(0)).map(|(_, result)| result)
+}
+
+/// Runs `sql`, and returns its rows -- at most `limit` of them -- and what it
+/// did.
 ///
 /// The cursor reports rows written but neither count SQLite keeps, so those
 /// come from `changes()` and `last_insert_rowid()` right after -- still
 /// synchronously, so nothing can run in between. Only after a statement that
 /// wrote: `changes()` keeps the count of the last write, and a `SELECT` must
 /// not report the `INSERT` before it.
-pub(crate) fn run(
+pub(crate) fn execute(
     storage: &worker::SqlStorage,
     sql: &str,
     arguments: &[DoArgumentValue],
-) -> Result<QueryResult, Error> {
-    let (_, rows_written) = fetch(storage, sql, arguments, Some(0))?;
+    limit: Option<usize>,
+) -> Result<(Vec<DoRow>, QueryResult), Error> {
+    let (rows, rows_written) = fetch(storage, sql, arguments, limit)?;
 
     if rows_written == 0 {
-        return Ok(QueryResult::default());
+        return Ok((rows, QueryResult::default()));
     }
 
-    let (rows, _) = fetch(storage, "SELECT changes(), last_insert_rowid()", &[], None)?;
-    let row = rows.first().ok_or_else(|| {
+    let (counts, _) = fetch(storage, "SELECT changes(), last_insert_rowid()", &[], None)?;
+    let counts = counts.first().ok_or_else(|| {
         Error::Protocol("`SELECT changes(), last_insert_rowid()` returned no row".into())
     })?;
 
-    let changes = row.values[0].int().map_err(Error::Decode)?;
-    let rowid = row.values[1].int().map_err(Error::Decode)?;
+    let changes = counts.values[0].int().map_err(Error::Decode)?;
+    let rowid = counts.values[1].int().map_err(Error::Decode)?;
 
-    Ok(QueryResult::new(
+    let result = QueryResult::new(
         u64::try_from(changes).map_err(|error| Error::Decode(error.into()))?,
         Some(rowid),
-    ))
+    );
+
+    Ok((rows, result))
 }
 
 fn exec(
