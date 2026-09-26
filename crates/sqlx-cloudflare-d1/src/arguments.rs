@@ -1,33 +1,10 @@
+use sqlx_cloudflare_core::add_argument;
 use sqlx_core::arguments::Arguments;
-use sqlx_core::encode::{Encode, IsNull};
+use sqlx_core::encode::Encode;
 use sqlx_core::error::BoxDynError;
 use sqlx_core::types::Type;
 
-use crate::D1;
-
-/// One bound parameter, in the shape D1 accepts across the JavaScript
-/// boundary.
-///
-/// Owned rather than borrowed: sqlx 0.9's `Arguments` has no lifetime, and the
-/// conversion to a JavaScript value happens once, when the query runs.
-///
-/// Non-exhaustive so that D1 growing a representation -- a `BigInt`, say --
-/// is not a breaking change for `Encode` impls outside this crate.
-#[derive(Debug, Clone, PartialEq)]
-#[non_exhaustive]
-pub enum D1ArgumentValue {
-    /// SQL `NULL`: JavaScript `null`.
-    Null,
-    /// Within ±(2^53 − 1), because D1 takes a JavaScript number and not a
-    /// `BigInt` -- anything wider would be rounded on the way in.
-    Integer(i64),
-    /// A JavaScript number, stored as `REAL`.
-    Real(f64),
-    /// A JavaScript string, stored as `TEXT`.
-    Text(String),
-    /// An `ArrayBuffer`, stored as `BLOB`.
-    Blob(Vec<u8>),
-}
+use crate::{D1ArgumentValue, D1};
 
 /// The parameters bound to one query, in placeholder order.
 ///
@@ -54,25 +31,7 @@ impl Arguments for D1Arguments {
     where
         T: Encode<'t, D1> + Type<D1>,
     {
-        let len = self.values.len();
-
-        match value.encode(&mut self.values) {
-            Ok(IsNull::Yes) => {
-                // An encoder that reports NULL may still have pushed something;
-                // the placeholder must line up with exactly one value.
-                self.values.truncate(len);
-                self.values.push(D1ArgumentValue::Null);
-            }
-            Ok(IsNull::No) => {}
-            Err(error) => {
-                // Leave the arguments as they were, so a failed bind cannot
-                // shift every later parameter one placeholder to the right.
-                self.values.truncate(len);
-                return Err(error);
-            }
-        }
-
-        Ok(())
+        add_argument(&mut self.values, value)
     }
 
     fn len(&self) -> usize {

@@ -19,6 +19,10 @@ workspace = true
 default = []
 
 [dependencies]
+# `version` alongside `path` because `cargo publish` refuses a path dependency
+# without one -- the published crate has no sibling directory to resolve, only
+# a registry. release-please's cargo-workspace plugin keeps it in step.
+sqlx-cloudflare-core = { path = "../sqlx-cloudflare-core", version = "0.1.0" }
 sqlx-core = { workspace = true }
 worker = { workspace = true, features = ["d1"] }
 wasm-bindgen = { workspace = true }

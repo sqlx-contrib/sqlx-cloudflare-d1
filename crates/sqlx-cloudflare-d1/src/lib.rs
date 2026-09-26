@@ -56,23 +56,28 @@ mod database;
 mod error;
 mod executor;
 mod js;
-mod query_result;
 mod row;
 mod statement;
 mod transaction;
 pub mod types;
 mod value;
 
-pub use arguments::{D1ArgumentValue, D1Arguments};
+pub use arguments::D1Arguments;
 pub use column::D1Column;
 pub use connection::{D1ConnectOptions, D1Connection};
 pub use database::D1;
-pub use error::D1DatabaseError;
-pub use query_result::D1QueryResult;
 pub use row::D1Row;
 pub use statement::D1Statement;
 pub use transaction::D1TransactionManager;
-pub use value::{D1TypeInfo, D1Value, D1ValueRef};
+pub use value::{D1Value, D1ValueRef};
+
+// The types D1 shares with Durable Object storage, under D1's names: both are
+// SQLite behind a JavaScript API, so they are the same types underneath.
+#[doc(inline)]
+pub use sqlx_cloudflare_core::{
+    ArgumentValue as D1ArgumentValue, DatabaseError as D1DatabaseError,
+    QueryResult as D1QueryResult, TypeInfo as D1TypeInfo,
+};
 
 /// An executor for D1: `&D1Connection` or `&mut D1Connection`.
 pub trait D1Executor<'c>: sqlx_core::executor::Executor<'c, Database = D1> {}

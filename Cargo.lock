@@ -1000,6 +1000,7 @@ dependencies = [
  "log",
  "serde_json",
  "sqlx",
+ "sqlx-cloudflare-core",
  "sqlx-core",
  "ureq",
  "wasm-bindgen",

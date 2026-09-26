@@ -27,11 +27,7 @@
 //! indistinguishable from the integer `3`, and is typed `INTEGER`. That is why
 //! the float types decode from `INTEGER` too.
 
-mod bool;
-mod bytes;
-mod float;
-mod int;
-mod str;
+sqlx_cloudflare_core::impl_types!(crate::D1);
 
 // Through `Row::try_get`, as a consumer decodes: that runs `Type::compatible`
 // before `Decode`, and the two have to agree.
@@ -45,14 +41,15 @@ mod tests {
     use sqlx_core::row::Row;
     use sqlx_core::types::Type;
 
-    use crate::value::D1ValueData;
-    use crate::{D1ArgumentValue, D1Arguments, D1Row, D1Value, D1};
+    use sqlx_cloudflare_core::Value;
 
-    fn get<T>(data: D1ValueData) -> Result<T, sqlx_core::error::Error>
+    use crate::{D1ArgumentValue, D1Arguments, D1Row, D1};
+
+    fn get<T>(data: Value) -> Result<T, sqlx_core::error::Error>
     where
         T: for<'r> Decode<'r, D1> + Type<D1>,
     {
-        let rows = D1Row::from_result(vec!["v".into()], vec![vec![D1Value(data)]]).unwrap();
+        let rows = D1Row::from_result(vec!["v".into()], vec![vec![data]]).unwrap();
         rows[0].try_get("v")
     }
 
@@ -64,57 +61,48 @@ mod tests {
 
     #[test]
     fn a_narrow_integer_that_does_not_fit_is_an_error() {
-        assert_eq!(get::<i32>(D1ValueData::Integer(5)).unwrap(), 5);
-        assert!(get::<i8>(D1ValueData::Integer(300)).is_err());
-        assert!(get::<u8>(D1ValueData::Integer(256)).is_err());
-        assert!(get::<u32>(D1ValueData::Integer(-1)).is_err());
-        assert_eq!(
-            get::<u32>(D1ValueData::Integer(4_294_967_295)).unwrap(),
-            u32::MAX
-        );
+        assert_eq!(get::<i32>(Value::Integer(5)).unwrap(), 5);
+        assert!(get::<i8>(Value::Integer(300)).is_err());
+        assert!(get::<u8>(Value::Integer(256)).is_err());
+        assert!(get::<u32>(Value::Integer(-1)).is_err());
+        assert_eq!(get::<u32>(Value::Integer(4_294_967_295)).unwrap(), u32::MAX);
     }
 
     #[test]
     fn any_non_zero_integer_is_true() {
-        assert!(!get::<bool>(D1ValueData::Integer(0)).unwrap());
-        assert!(get::<bool>(D1ValueData::Integer(1)).unwrap());
-        assert!(get::<bool>(D1ValueData::Integer(2)).unwrap());
-        assert!(get::<bool>(D1ValueData::Integer(-1)).unwrap());
-        assert!(get::<bool>(D1ValueData::Text("true".into())).is_err());
+        assert!(!get::<bool>(Value::Integer(0)).unwrap());
+        assert!(get::<bool>(Value::Integer(1)).unwrap());
+        assert!(get::<bool>(Value::Integer(2)).unwrap());
+        assert!(get::<bool>(Value::Integer(-1)).unwrap());
+        assert!(get::<bool>(Value::Text("true".into())).is_err());
     }
 
     #[test]
     fn floats_decode_from_integers_too() {
-        assert!((get::<f32>(D1ValueData::Integer(3)).unwrap() - 3.0).abs() < f32::EPSILON);
-        assert!((get::<f64>(D1ValueData::Real(0.25)).unwrap() - 0.25).abs() < f64::EPSILON);
-        assert!(get::<f64>(D1ValueData::Text("1.5".into())).is_err());
+        assert!((get::<f32>(Value::Integer(3)).unwrap() - 3.0).abs() < f32::EPSILON);
+        assert!((get::<f64>(Value::Real(0.25)).unwrap() - 0.25).abs() < f64::EPSILON);
+        assert!(get::<f64>(Value::Text("1.5".into())).is_err());
     }
 
     #[test]
     fn bytes_decode_from_text_but_text_not_from_bytes() {
-        assert_eq!(
-            get::<Vec<u8>>(D1ValueData::Text("ab".into())).unwrap(),
-            b"ab"
-        );
-        assert_eq!(
-            get::<Vec<u8>>(D1ValueData::Blob(vec![0, 255])).unwrap(),
-            [0, 255]
-        );
-        assert!(get::<String>(D1ValueData::Blob(b"ab".to_vec())).is_err());
+        assert_eq!(get::<Vec<u8>>(Value::Text("ab".into())).unwrap(), b"ab");
+        assert_eq!(get::<Vec<u8>>(Value::Blob(vec![0, 255])).unwrap(), [0, 255]);
+        assert!(get::<String>(Value::Blob(b"ab".to_vec())).is_err());
     }
 
     #[test]
     fn nothing_converts_between_numbers_and_text() {
-        assert!(get::<String>(D1ValueData::Integer(1)).is_err());
-        assert!(get::<i64>(D1ValueData::Text("1".into())).is_err());
-        assert!(get::<i64>(D1ValueData::Real(1.5)).is_err());
+        assert!(get::<String>(Value::Integer(1)).is_err());
+        assert!(get::<i64>(Value::Text("1".into())).is_err());
+        assert!(get::<i64>(Value::Real(1.5)).is_err());
     }
 
     #[test]
     fn null_decodes_only_into_an_option() {
-        assert_eq!(get::<Option<String>>(D1ValueData::Null).unwrap(), None);
-        assert!(get::<String>(D1ValueData::Null).is_err());
-        assert!(get::<i64>(D1ValueData::Null).is_err());
+        assert_eq!(get::<Option<String>>(Value::Null).unwrap(), None);
+        assert!(get::<String>(Value::Null).is_err());
+        assert!(get::<i64>(Value::Null).is_err());
     }
 
     #[test]
