@@ -41,6 +41,49 @@ impl Extend<QueryResult> for QueryResult {
     }
 }
 
+/// What one statement of a batch did, and the rows it returned.
+///
+/// Generic over the driver's row type, which only the driver can name;
+/// each driver exposes it as its own alias.
+#[derive(Debug, Clone)]
+pub struct BatchResult<R> {
+    rows: Vec<R>,
+    result: QueryResult,
+}
+
+impl<R> BatchResult<R> {
+    /// A statement's `rows` and what it did.
+    #[must_use]
+    pub fn new(rows: Vec<R>, result: QueryResult) -> Self {
+        Self { rows, result }
+    }
+
+    /// The rows the statement returned: a `SELECT`'s, or an `INSERT ...
+    /// RETURNING`'s. Empty for a statement that returns none.
+    #[must_use]
+    pub fn rows(&self) -> &[R] {
+        &self.rows
+    }
+
+    /// The rows, giving up the result.
+    #[must_use]
+    pub fn into_rows(self) -> Vec<R> {
+        self.rows
+    }
+
+    /// What the statement did.
+    #[must_use]
+    pub fn result(&self) -> &QueryResult {
+        &self.result
+    }
+
+    /// The rows and what the statement did.
+    #[must_use]
+    pub fn into_parts(self) -> (Vec<R>, QueryResult) {
+        (self.rows, self.result)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::QueryResult;
