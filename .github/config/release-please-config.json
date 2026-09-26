@@ -13,6 +13,10 @@
     "crates/sqlx-cloudflare-d1": {
       "component": "sqlx-cloudflare-d1",
       "release-as": "0.1.0"
+    },
+    "crates/sqlx-cloudflare-do": {
+      "component": "sqlx-cloudflare-do",
+      "release-as": "0.1.0"
     }
   },
   "plugins": [
