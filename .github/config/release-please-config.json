@@ -6,9 +6,15 @@
   "include-component-in-tag": true,
   "bump-minor-pre-major": true,
   "packages": {
-    ".": {
+    "crates/sqlx-cloudflare-d1": {
       "component": "sqlx-cloudflare-d1",
       "release-as": "0.1.0"
     }
-  }
+  },
+  "plugins": [
+    {
+      "type": "cargo-workspace",
+      "merge": false
+    }
+  ]
 }
