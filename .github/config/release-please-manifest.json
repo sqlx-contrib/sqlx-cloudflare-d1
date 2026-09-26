@@ -1,3 +1,4 @@
 {
+  "crates/sqlx-cloudflare-core": "0.1.0",
   "crates/sqlx-cloudflare-d1": "0.1.0"
 }

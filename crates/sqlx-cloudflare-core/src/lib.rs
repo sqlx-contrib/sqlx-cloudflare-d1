@@ -1,0 +1,38 @@
+//! The shared internals of the sqlx-cloudflare drivers.
+//!
+//! You want [`sqlx-cloudflare-d1`](https://docs.rs/sqlx-cloudflare-d1) or
+//! [`sqlx-cloudflare-do`](https://docs.rs/sqlx-cloudflare-do) instead. Both are
+//! SQLite behind a JavaScript API, so they share what this crate holds:
+//!
+//! - the value model -- [`Value`], [`TypeInfo`], [`ArgumentValue`] -- and the
+//!   ±(2^53 − 1) rule JavaScript numbers impose on integers;
+//! - the `Type`, `Encode` and `Decode` impls, written into each driver by
+//!   [`impl_types!`];
+//! - the conversion to and from JavaScript values ([`js`]);
+//! - [`DatabaseError`], read from SQLite's message text;
+//! - [`QueryResult`] and the typing of a result's columns ([`rows`]).
+//!
+//! What a driver keeps for itself is the part the orphan rule will not let it
+//! share: its `Database` type and the row, column, value and arguments types
+//! whose sqlx traits name it.
+//!
+//! This API serves those drivers and carries no stability promise of its own.
+
+mod arguments;
+mod error;
+pub mod js;
+mod query_result;
+mod row;
+mod types;
+mod value;
+
+pub use arguments::{add_argument, ArgumentValue};
+pub use error::DatabaseError;
+pub use query_result::QueryResult;
+pub use row::rows;
+pub use value::{safe_integer, AsValue, TypeInfo, Value, MAX_SAFE_INTEGER};
+
+// Named by `impl_types!`, which expands in a driver crate that need not
+// depend on sqlx-core under that name.
+#[doc(hidden)]
+pub use sqlx_core as __sqlx_core;

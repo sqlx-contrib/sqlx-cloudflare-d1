@@ -1,0 +1,22 @@
+[package]
+name = "sqlx-cloudflare-core"
+description = "Shared internals of the sqlx-cloudflare drivers; use sqlx-cloudflare-d1 or sqlx-cloudflare-do"
+version = "0.1.0" # literal, not inherited -- see [workspace.package]
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+readme = "README.md"
+keywords = ["sqlx", "cloudflare", "workers", "sqlite"]
+categories = ["database", "wasm"]
+
+[lints]
+workspace = true
+
+[dependencies]
+sqlx-core = { workspace = true }
+wasm-bindgen = { workspace = true }
+js-sys = { workspace = true }
+
+[package.metadata.docs.rs]
+targets = ["wasm32-unknown-unknown"]
